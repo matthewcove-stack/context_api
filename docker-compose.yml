@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: context
+      POSTGRES_USER: context
+      POSTGRES_PASSWORD: context
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U context -d context"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://context:context@postgres:5432/context
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://context:context@postgres:5432/context
+      CONTEXT_API_TOKEN: change-me
+      VERSION: "0.0.0"
+      GIT_SHA: "unknown"
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
+
+volumes:
+  postgres_data:
