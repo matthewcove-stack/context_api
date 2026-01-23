@@ -9,7 +9,7 @@ cp .env.example .env
 docker compose up --build
 ```
 
-API runs at `http://localhost:8001`.
+API runs at `http://localhost:8001` for host access. For container-to-container calls, use service names (for example `http://api:8001`) and avoid localhost.
 
 ## Configuration
 
@@ -24,7 +24,7 @@ Optional:
 - `GIT_SHA`
 - `GATEWAY_BASE_URL` (for sync script)
 - `GATEWAY_API_TOKEN` (for sync script)
-- `CONTEXT_API_BASE_URL` (for sync script, default http://localhost:8001)
+- `CONTEXT_API_BASE_URL` (for sync script, default http://api:8001)
 - `SYNC_LIMIT` (for sync script)
 
 ## Endpoints (v1)
@@ -79,9 +79,11 @@ docker compose run --rm api pytest
 The gateway already exposes read endpoints. This script pulls Projects + Tasks and upserts them into the cache:
 
 ```bash
-set GATEWAY_BASE_URL=http://localhost:5678/webhook
+set GATEWAY_BASE_URL=http://n8n:5678/webhook
 set GATEWAY_API_TOKEN=change-me
-set CONTEXT_API_BASE_URL=http://localhost:8001
+set CONTEXT_API_BASE_URL=http://api:8001
 set CONTEXT_API_TOKEN=change-me
-python scripts/sync_from_gateway.py 100
+docker compose run --rm api python scripts/sync_from_gateway.py 100
 ```
+
+Ensure the gateway container is reachable on a shared Docker network and reference it by service name (for example `n8n`).

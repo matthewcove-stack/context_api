@@ -128,9 +128,9 @@ def main() -> None:
     if len(sys.argv) > 1:
         limit = int(sys.argv[1])
 
-    gateway_base_url = env("GATEWAY_BASE_URL", "http://localhost:5678/webhook")
+    gateway_base_url = env("GATEWAY_BASE_URL", "http://n8n:5678/webhook")
     gateway_token = env("GATEWAY_API_TOKEN")
-    context_base_url = env("CONTEXT_API_BASE_URL", "http://localhost:8001")
+    context_base_url = env("CONTEXT_API_BASE_URL", "http://api:8001")
     context_token = env("CONTEXT_API_TOKEN")
     projects_key = env("PROJECTS_DB_KEY", "projects")
     tasks_key = env("TASKS_DB_KEY", "tasks")

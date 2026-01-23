@@ -11,6 +11,12 @@ Provide a read-optimized context API backed by Postgres for fast, deterministic 
 - Support manual sync endpoints first; background sync later.
   - Manual sync uses the Notion gateway db sample endpoint.
 
+## Constraints
+
+- Docker-only for services and scripts.
+- No host-installed dependencies for the canonical workflow.
+- Use Docker service names (not localhost) for container-to-container calls.
+
 ## Implemented API (v1)
 
 - `POST /v1/projects/sync`
