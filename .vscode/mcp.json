@@ -1,0 +1,17 @@
+{
+  "servers": {
+    "drift-guard": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "-i",
+        "-v",
+        "${workspaceFolder}:/workspace",
+        "-w",
+        "/workspace",
+        "drift-guard-mcp:local"
+      ]
+    }
+  }
+}
