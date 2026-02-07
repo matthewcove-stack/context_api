@@ -4,10 +4,11 @@
 - FastAPI + Postgres + Alembic
 - Authenticated v1 endpoints for searching mirrored Projects/Tasks
 - Intel fixture ingestion + /v2 Context Pack retrieval with progressive disclosure endpoints
+- URL ingestion + worker-based fetch/extract/enrich pipeline for intel articles
 - Docker quickstart and tests exist
 
 ## MVP priority (now)
-Add URL ingestion with fetch/extract and LLM enrichment, feeding the existing intel-only /v2 Context Pack.
+URL ingestion with fetch/extract and LLM enrichment is implemented and feeds the existing intel-only /v2 Context Pack.
 
 This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 
@@ -35,23 +36,21 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 ### Ingestion (fixtures)
 - `POST /v2/intel/ingest` ingests checked-in fixtures into Postgres (deterministic).
 
-## Next to implement (Phase 3)
 ### URL ingestion + LLM enrichment
 - `POST /v2/intel/ingest_urls`:
   - accepts list of URLs; queues ingestion jobs; returns job_id/article_id per URL
-- Worker:
-  - fetch (bounded), extract, sectionise
-  - LLM enrichment produces: outline + summary + signals (each signal citeable to section_id)
-  - stores results into intel_articles + intel_article_sections
 - Status:
   - `GET /v2/intel/articles/{article_id}` returns job/status and includes enrichment outputs when ready
 
 ## Storage (MVP)
 Current intel tables:
-- intel_articles (signals/summary/outline/topics)
+- intel_articles (signals/summary/outline/topics + fetch/extraction/enrichment metadata + status)
 - intel_article_sections (content + FTS index)
+- intel_ingest_jobs (queue for URL ingestion)
 
-Phase 3 extends intel_articles and adds intel_ingest_jobs to support URL ingestion and enrichment metadata.
+## Worker (Phase 3)
+Run locally:
+- `docker compose run --rm api python -m app.intel.worker --once`
 
 ## Drift prevention
 Whenever code changes meaningfully affect:

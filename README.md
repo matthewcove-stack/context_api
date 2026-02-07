@@ -4,10 +4,11 @@
 - FastAPI + Postgres + Alembic
 - Authenticated v1 endpoints for searching mirrored Projects/Tasks
 - Intel fixture ingestion + /v2 Context Pack retrieval with progressive disclosure endpoints
+- URL ingestion + worker-based fetch/extract/enrich pipeline for intel articles
 - Docker quickstart and tests exist
 
 ## MVP priority (now)
-Add URL ingestion with fetch/extract and LLM enrichment, feeding the existing intel-only /v2 Context Pack.
+URL ingestion with fetch/extract and LLM enrichment feeds the existing intel-only /v2 Context Pack.
 
 This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 
@@ -36,10 +37,12 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 ### Ingestion (fixtures)
 - `POST /v2/intel/ingest` ingests checked-in fixtures into Postgres (deterministic).
 
-## Next to implement (Phase 3)
-- `POST /v2/intel/ingest_urls` to queue URL ingestion jobs.
-- Worker process to fetch/extract/sectionise and run LLM enrichment.
-- `GET /v2/intel/articles/{article_id}` to read status and outputs.
+## URL ingestion + status
+- `POST /v2/intel/ingest_urls` queues URL ingestion jobs (fetch/extract/enrich).
+- `GET /v2/intel/articles/{article_id}` returns status + compact outputs.
+
+## Worker
+- `docker compose run --rm api python -m app.intel.worker --once`
 
 ## Quick commands
 - Setup: `cp .env.example .env`

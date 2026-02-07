@@ -79,6 +79,7 @@ def _normalize_fixture(fixture: Dict[str, Any]) -> Tuple[Dict[str, Any], List[Di
         "signals": signals,
         "outline": outline,
         "outbound_links": outbound_links,
+        "status": "enriched",
     }
     return article_row, sections
 

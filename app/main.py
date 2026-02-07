@@ -14,8 +14,11 @@ from app.models import (
     ChunkSearchResponse,
     ContextPackRequest,
     ContextPackResponse,
+    IntelArticleStatusResponse,
     IntelIngestRequest,
     IntelIngestResponse,
+    IntelIngestUrlsRequest,
+    IntelIngestUrlsResponse,
     OutlineResponse,
     ProjectResponse,
     SearchRequest,
@@ -30,15 +33,21 @@ from app.models import (
 )
 from app.storage.db import (
     check_db,
+    canonicalize_url,
+    compute_article_id,
+    create_intel_ingest_job,
     create_db_engine,
     get_project,
     get_task,
+    get_intel_article,
     get_intel_outline,
     get_intel_sections,
+    get_latest_job_error,
     search_intel_articles,
     search_intel_sections,
     search_projects,
     search_tasks,
+    upsert_intel_article_seed,
     upsert_projects,
     upsert_tasks,
 )
@@ -468,6 +477,112 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                 }
             )
         return ChunkSearchResponse(article_id=article_id, chunks=trimmed)
+
+    @app.post("/v2/intel/ingest_urls", response_model=IntelIngestUrlsResponse)
+    def ingest_intel_urls_endpoint(
+        payload: IntelIngestUrlsRequest,
+        _: None = Depends(require_bearer),
+    ) -> IntelIngestUrlsResponse:
+        results = []
+        for url in payload.urls:
+            if not url or not isinstance(url, str):
+                results.append({"url": url or "", "status": "failed", "reason": "invalid url"})
+                continue
+            canonical = canonicalize_url(url)
+            if not canonical:
+                results.append({"url": url, "status": "failed", "reason": "invalid url"})
+                continue
+            article_id = compute_article_id(canonical)
+            existing = get_intel_article(app.state.engine, article_id)
+            if existing and not payload.force_refetch and existing.get("status") == "enriched":
+                results.append({"url": url, "status": "deduped", "article_id": article_id})
+                continue
+            try:
+                upsert_intel_article_seed(
+                    app.state.engine,
+                    article_id=article_id,
+                    url=canonical,
+                    url_original=url,
+                    topics=payload.topics,
+                    tags=payload.tags,
+                    status="queued",
+                    force_reset=bool(payload.force_refetch),
+                )
+                job_status = "queued" if payload.enrich is not False else "queued_no_enrich"
+                job_id = create_intel_ingest_job(
+                    app.state.engine,
+                    url_original=url,
+                    url_canonical=canonical,
+                    article_id=article_id,
+                    status=job_status,
+                )
+            except SQLAlchemyError as exc:
+                results.append({"url": url, "status": "failed", "reason": str(exc)})
+                continue
+            results.append(
+                {
+                    "url": url,
+                    "status": "queued",
+                    "article_id": article_id,
+                    "job_id": job_id,
+                }
+            )
+        return IntelIngestUrlsResponse(results=results)
+
+    @app.get("/v2/intel/articles/{article_id}", response_model=IntelArticleStatusResponse)
+    def intel_article_status_endpoint(
+        article_id: str,
+        _: None = Depends(require_bearer),
+    ) -> IntelArticleStatusResponse:
+        row = get_intel_article(app.state.engine, article_id)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
+        last_error = get_latest_job_error(app.state.engine, article_id)
+        status_value = row.get("status") or "queued"
+        fetch_meta = row.get("fetch_meta") or {}
+        extraction_meta = row.get("extraction_meta") or {}
+        enrichment_meta = row.get("enrichment_meta") or {}
+        meta = {
+            "fetch": {
+                "http_status": row.get("http_status"),
+                "content_type": row.get("content_type"),
+                "fetched_at": fetch_meta.get("fetched_at"),
+                "warnings": fetch_meta.get("warnings") or [],
+            }
+            if fetch_meta
+            else None,
+            "extraction": {
+                "method": extraction_meta.get("method"),
+                "confidence": extraction_meta.get("confidence"),
+                "warnings": extraction_meta.get("warnings") or [],
+            }
+            if extraction_meta
+            else None,
+            "enrichment": {
+                "model": enrichment_meta.get("model"),
+                "prompt_version": enrichment_meta.get("prompt_version"),
+                "confidence": enrichment_meta.get("confidence"),
+                "token_usage": enrichment_meta.get("token_usage"),
+                "warnings": enrichment_meta.get("warnings") or [],
+            }
+            if enrichment_meta
+            else None,
+        }
+        summary = row.get("summary") if status_value in ("enriched", "partial") else None
+        signals = row.get("signals") if status_value in ("enriched", "partial") else None
+        outline = row.get("outline") if status_value in ("extracted", "enriched", "partial") else None
+        return IntelArticleStatusResponse(
+            article_id=article_id,
+            url=row.get("url") or "",
+            title=row.get("title"),
+            status=status_value,
+            topics=row.get("topics") or [],
+            summary=summary,
+            signals=signals,
+            outline=outline,
+            meta=meta,
+            last_error=last_error,
+        )
 
     return app
 

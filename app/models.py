@@ -183,3 +183,63 @@ class IntelIngestRequest(BaseModel):
 
 class IntelIngestResponse(BaseModel):
     ingested_article_ids: List[str]
+
+
+class IntelIngestUrlsRequest(BaseModel):
+    urls: List[str]
+    topics: Optional[List[str]] = None
+    tags: Optional[List[str]] = None
+    force_refetch: Optional[bool] = False
+    enrich: Optional[bool] = True
+
+
+class IntelIngestUrlsResult(BaseModel):
+    url: str
+    status: Literal["queued", "deduped", "failed"]
+    article_id: Optional[str] = None
+    job_id: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class IntelIngestUrlsResponse(BaseModel):
+    results: List[IntelIngestUrlsResult]
+
+
+class IntelArticleFetchMeta(BaseModel):
+    http_status: Optional[int] = None
+    content_type: Optional[str] = None
+    fetched_at: Optional[str] = None
+    warnings: Optional[List[str]] = None
+
+
+class IntelArticleExtractionMeta(BaseModel):
+    method: Optional[str] = None
+    confidence: Optional[float] = None
+    warnings: Optional[List[str]] = None
+
+
+class IntelArticleEnrichmentMeta(BaseModel):
+    model: Optional[str] = None
+    prompt_version: Optional[str] = None
+    confidence: Optional[float] = None
+    token_usage: Optional[Dict[str, Any]] = None
+    warnings: Optional[List[str]] = None
+
+
+class IntelArticleStatusMeta(BaseModel):
+    fetch: Optional[IntelArticleFetchMeta] = None
+    extraction: Optional[IntelArticleExtractionMeta] = None
+    enrichment: Optional[IntelArticleEnrichmentMeta] = None
+
+
+class IntelArticleStatusResponse(BaseModel):
+    article_id: str
+    url: str
+    title: Optional[str] = None
+    status: Literal["queued", "extracted", "enriched", "failed", "partial"]
+    topics: List[str]
+    summary: Optional[str] = None
+    signals: Optional[List[Dict[str, Any]]] = None
+    outline: Optional[List[Dict[str, Any]]] = None
+    meta: Optional[IntelArticleStatusMeta] = None
+    last_error: Optional[str] = None

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, MetaData, Table, Text, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func
 
 metadata = MetaData()
@@ -42,6 +42,7 @@ intel_articles = Table(
     "intel_articles",
     metadata,
     Column("article_id", Text, primary_key=True),
+    Column("url_original", Text, nullable=True),
     Column("url", Text, nullable=False),
     Column("title", Text, nullable=False),
     Column("publisher", Text, nullable=True),
@@ -53,6 +54,18 @@ intel_articles = Table(
     Column("signals", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
     Column("outline", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
     Column("outbound_links", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("raw_html", Text, nullable=True),
+    Column("extracted_text", Text, nullable=True),
+    Column("http_status", Integer, nullable=True),
+    Column("content_type", Text, nullable=True),
+    Column("etag", Text, nullable=True),
+    Column("last_modified", Text, nullable=True),
+    Column("fetch_meta", JSONB, nullable=True),
+    Column("extraction_meta", JSONB, nullable=True),
+    Column("enrichment_meta", JSONB, nullable=True),
+    Column("status", Text, nullable=False, server_default=text("'queued'")),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("tags", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
     Index("ix_intel_articles_ingested_at", "ingested_at"),
     Index("ix_intel_articles_published_at", "published_at"),
 )
@@ -70,4 +83,20 @@ intel_article_sections = Table(
     Column("heading", Text, nullable=False, server_default=text("''")),
     Column("content", Text, nullable=False),
     Column("rank", Integer, nullable=False, server_default=text("0")),
+)
+
+intel_ingest_jobs = Table(
+    "intel_ingest_jobs",
+    metadata,
+    Column("job_id", UUID(as_uuid=True), primary_key=True),
+    Column("url_original", Text, nullable=False),
+    Column("url_canonical", Text, nullable=False),
+    Column("article_id", Text, nullable=False),
+    Column("status", Text, nullable=False, server_default=text("'queued'")),
+    Column("attempts", Integer, nullable=False, server_default=text("0")),
+    Column("last_error", Text, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Index("ix_intel_ingest_jobs_status_created_at", "status", "created_at"),
+    Index("ix_intel_ingest_jobs_article_id", "article_id"),
 )
