@@ -77,11 +77,17 @@ Exit criteria:
 Goal: make the knowledge base usable from ChatGPT UI (Plus plan) via a Custom GPT with Actions.
 
 Deliverables:
-- OpenAPI schema limited to read-only endpoints for /v2 context pack + expansion.
-- Custom GPT instruction block that enforces 'pack first' behavior.
-- Deployment guidance for public HTTPS via Cloudflare Tunnel.
-- docker-compose override for cloudflared.
+- OpenAPI schema limited to read-only endpoints:
+  - adapters/chatgpt_actions/openapi.yaml
+- Custom GPT instructions:
+  - adapters/chatgpt_actions/gpt_instructions.md
+- Setup docs:
+  - docs/chatgpt_actions_setup.md
+  - docs/deployment/cloudflare_tunnel.md
+- docker-compose override for cloudflared:
+  - docker-compose.cloudflare-tunnel.yml
 
 Exit criteria:
 - Public URL reachable over HTTPS.
-- Custom GPT can successfully call getContextPack and expansion endpoints using bearer auth.
+- Custom GPT can successfully call /v2/context/pack and expansion endpoints using bearer auth.
+

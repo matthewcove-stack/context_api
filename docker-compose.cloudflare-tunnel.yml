@@ -1,10 +1,7 @@
 services:
   cloudflared:
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    environment:
-      - CLOUDFLARE_TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+    image: cloudflare/cloudflared:2024.10.0
     command: ["tunnel", "--no-autoupdate", "run", "--token", "${CLOUDFLARE_TUNNEL_TOKEN}"]
     depends_on:
-      api:
-        condition: service_started
+      - api
+    restart: unless-stopped

@@ -1,172 +1,325 @@
-openapi: 3.0.3
+openapi: 3.1.0
 info:
-  title: Lambic Labs Context API
-  version: "1.0"
+  title: context_api ChatGPT Actions (read-only)
+  version: 0.0.0
+  description: |
+    Read-only endpoints for retrieving Context Packs and intel article details.
 servers:
-  # Replace with your public HTTPS base URL (Cloudflare Tunnel / VPS), e.g. https://kb.lambiclabs.com
-  - url: https://YOUR_PUBLIC_CONTEXT_API_BASE_URL
-paths:
-/health:
-  get:
-    operationId: getHealth
-    summary: Health check (no auth)
-    responses:
-      "200":
-        description: OK
-        content:
-          application/json:
-            schema:
-              type: object
-/ready:
-  get:
-    operationId: getReady
-    summary: Readiness check (DB reachable)
-    security:
-      - bearerAuth: []
-    responses:
-      "200":
-        description: Ready
-        content:
-          application/json:
-            schema:
-              type: object
-      "503":
-        description: Not ready
-        content:
-          application/json:
-            schema:
-              type: object
-
-  /v2/context/pack:
-    post:
-      operationId: getContextPack
-      summary: Retrieve a compact intel-only context pack for a query
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [query]
-              properties:
-                query:
-                  type: string
-                topics:
-                  type: array
-                  items: { type: string }
-                tags:
-                  type: array
-                  items: { type: string }
-                token_budget:
-                  type: integer
-                  minimum: 200
-                  maximum: 4000
-                  description: Soft budget for pack size. The server enforces its own bounds.
-                recency_days:
-                  type: integer
-                  minimum: 1
-                  maximum: 3650
-                max_items:
-                  type: integer
-                  minimum: 1
-                  maximum: 20
-      responses:
-        "200":
-          description: Context pack
-          content:
-            application/json:
-              schema:
-                type: object
-
-  /v2/intel/articles/{article_id}/outline:
-    get:
-      operationId: getIntelOutline
-      summary: Get outline for an intel article
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: path
-          name: article_id
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: Outline
-          content:
-            application/json:
-              schema:
-                type: object
-
-  /v2/intel/articles/{article_id}/sections:
-    post:
-      operationId: getIntelSections
-      summary: Fetch specific sections for an intel article (progressive disclosure)
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: path
-          name: article_id
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                section_ids:
-                  type: array
-                  items: { type: string }
-                max_chars:
-                  type: integer
-                  minimum: 200
-                  maximum: 20000
-      responses:
-        "200":
-          description: Sections
-          content:
-            application/json:
-              schema:
-                type: object
-
-  /v2/intel/articles/{article_id}/chunks:search:
-    post:
-      operationId: searchIntelChunks
-      summary: Search within a single intel article
-      security:
-        - bearerAuth: []
-      parameters:
-        - in: path
-          name: article_id
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [query]
-              properties:
-                query:
-                  type: string
-                limit:
-                  type: integer
-                  minimum: 1
-                  maximum: 20
-      responses:
-        "200":
-          description: Search results
-          content:
-            application/json:
-              schema:
-                type: object
-
+  - url: https://YOUR_PUBLIC_BASE_URL
+    description: Public base URL for context_api (replace before use)
 components:
   securitySchemes:
     bearerAuth:
-      type: http
-      scheme: bearer
+      type: apiKey
+      in: header
+      name: Authorization
+      description: "Bearer <CONTEXT_API_TOKEN>"
+  schemas:
+    ContextPackRequest:
+      type: object
+      properties:
+        query:
+          type: string
+        topics:
+          type: array
+          items:
+            type: string
+        token_budget:
+          type: integer
+        recency_days:
+          type: integer
+        max_items:
+          type: integer
+      required: [query]
+    CitePointer:
+      type: object
+      properties:
+        article_id:
+          type: string
+        section_id:
+          type: string
+      required: [article_id]
+    Signal:
+      type: object
+      properties:
+        claim:
+          type: string
+        why:
+          type: string
+        tradeoff:
+          type: string
+        cite:
+          $ref: "#/components/schemas/CitePointer"
+      required: [claim, why, cite]
+    Citation:
+      type: object
+      properties:
+        url:
+          type: string
+        article_id:
+          type: string
+        section_id:
+          type: string
+      required: [url, article_id]
+    ContextPackItem:
+      type: object
+      properties:
+        article_id:
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+        summary:
+          type: string
+        signals:
+          type: array
+          items:
+            $ref: "#/components/schemas/Signal"
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Citation"
+      required: [article_id, title, url, summary, signals, citations]
+    ContextPackResponse:
+      type: object
+      properties:
+        pack:
+          type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/ContextPackItem"
+        retrieval_confidence:
+          type: string
+          enum: [high, med, low]
+        next_action:
+          type: string
+          enum: [proceed, refine_query, expand_sections]
+        trace:
+          type: object
+          properties:
+            trace_id:
+              type: string
+            retrieved_article_ids:
+              type: array
+              items:
+                type: string
+            timing_ms:
+              type: object
+          required: [trace_id, retrieved_article_ids]
+      required: [pack, retrieval_confidence, next_action, trace]
+    OutlineResponse:
+      type: object
+      properties:
+        article_id:
+          type: string
+        outline:
+          type: array
+          items:
+            type: object
+            properties:
+              section_id:
+                type: string
+              heading:
+                type: string
+              blurb:
+                type: string
+            required: [section_id, heading]
+      required: [article_id, outline]
+    SectionsRequest:
+      type: object
+      properties:
+        section_ids:
+          type: array
+          items:
+            type: string
+      required: [section_ids]
+    SectionsResponse:
+      type: object
+      properties:
+        article_id:
+          type: string
+        sections:
+          type: array
+          items:
+            type: object
+            properties:
+              section_id:
+                type: string
+              heading:
+                type: string
+              content:
+                type: string
+              rank:
+                type: integer
+            required: [section_id, heading, content, rank]
+      required: [article_id, sections]
+    ChunkSearchRequest:
+      type: object
+      properties:
+        query:
+          type: string
+        max_chars:
+          type: integer
+        max_chunks:
+          type: integer
+      required: [query]
+    ChunkSearchResponse:
+      type: object
+      properties:
+        article_id:
+          type: string
+        chunks:
+          type: array
+          items:
+            type: object
+            properties:
+              section_id:
+                type: string
+              snippet:
+                type: string
+              score:
+                type: number
+            required: [section_id, snippet]
+      required: [article_id, chunks]
+    IntelArticleStatusResponse:
+      type: object
+      properties:
+        article_id:
+          type: string
+        url:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+          enum: [queued, extracted, enriched, failed, partial]
+        topics:
+          type: array
+          items:
+            type: string
+        summary:
+          type: string
+        signals:
+          type: array
+          items:
+            type: object
+        outline:
+          type: array
+          items:
+            type: object
+        meta:
+          type: object
+        last_error:
+          type: string
+      required: [article_id, url, status, topics]
+paths:
+  /v2/context/pack:
+    post:
+      summary: Retrieve a context pack from intel articles
+      operationId: contextPack
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContextPackRequest"
+      responses:
+        "200":
+          description: Context pack response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContextPackResponse"
+  /v2/intel/articles/{article_id}:
+    get:
+      summary: Get intel article status and compact outputs
+      operationId: getIntelArticleStatus
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: article_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Intel article status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IntelArticleStatusResponse"
+  /v2/intel/articles/{article_id}/outline:
+    get:
+      summary: Get article outline
+      operationId: getIntelOutline
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: article_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Outline response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OutlineResponse"
+  /v2/intel/articles/{article_id}/sections:
+    post:
+      summary: Get article sections by id
+      operationId: getIntelSections
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: article_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SectionsRequest"
+      responses:
+        "200":
+          description: Sections response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SectionsResponse"
+  /v2/intel/articles/{article_id}/chunks:search:
+    post:
+      summary: Search for chunks within article sections
+      operationId: searchIntelChunks
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: article_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChunkSearchRequest"
+      responses:
+        "200":
+          description: Chunk search response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChunkSearchResponse"

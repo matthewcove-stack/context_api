@@ -52,6 +52,13 @@ Current intel tables:
 Run locally:
 - `docker compose run --rm api python -m app.intel.worker --once`
 
+## Actions integration (Phase 4)
+ChatGPT Actions assets and docs are available:
+- OpenAPI schema: adapters/chatgpt_actions/openapi.yaml (read-only endpoints)
+- GPT instructions: adapters/chatgpt_actions/gpt_instructions.md
+- Setup guide: docs/chatgpt_actions_setup.md
+- Cloudflare Tunnel guide: docs/deployment/cloudflare_tunnel.md
+
 ## Drift prevention
 Whenever code changes meaningfully affect:
 - API contracts

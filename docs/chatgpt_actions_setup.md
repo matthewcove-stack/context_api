@@ -1,52 +1,46 @@
-# ChatGPT Custom GPT + Actions setup (Plus plan)
+# ChatGPT Actions setup (context_api)
 
-This repo exposes a Context API that can act as an external knowledge base for ChatGPT using a Custom GPT with Actions.
+This guide configures a Custom GPT (Actions) to use context_api as a read-only knowledge base.
 
-## What you'll create
-- A Custom GPT (e.g. "Lambic Labs Operator")
-- One Action using the OpenAPI schema in:
-  - adapters/chatgpt_actions/openapi.yaml
-- Bearer auth using the same CONTEXT_API_TOKEN you run the API with
+## Prereqs
+- A public base URL for context_api (Cloudflare Tunnel recommended)
+- CONTEXT_API_TOKEN (bearer token)
+- Updated OpenAPI schema with your public base URL
 
-## Step 1 — Run context_api publicly (HTTPS)
-Use Cloudflare Tunnel (recommended):
-- Follow docs/deployment/cloudflare_tunnel.md
-- You will get a public HTTPS URL (e.g. https://kb.lambiclabs.com)
+## Files
+- OpenAPI schema: adapters/chatgpt_actions/openapi.yaml
+- GPT instructions: adapters/chatgpt_actions/gpt_instructions.md
 
-## Step 2 — Prepare the OpenAPI schema
-Open:
-- adapters/chatgpt_actions/openapi.yaml
-Replace:
-- https://YOUR_PUBLIC_CONTEXT_API_BASE_URL
-with your real public base URL.
+## Step 1: Set PUBLIC_BASE_URL
+Set PUBLIC_BASE_URL in .env or your deployment environment.
 
-## Step 3 — Create the Custom GPT
-In ChatGPT:
-1) Create a GPT -> Configure -> Actions -> Import OpenAPI
-2) Paste the OpenAPI YAML
-3) Authentication: API Key / Bearer
-   - Header: Authorization
+Example:
+- PUBLIC_BASE_URL=https://your-public-hostname.example
+
+## Step 2: Create the Custom GPT
+1) Open ChatGPT (Plus plan) and create a new GPT.
+2) Paste adapters/chatgpt_actions/gpt_instructions.md into the Instructions field.
+3) Add an Action and import adapters/chatgpt_actions/openapi.yaml.
+   - Replace https://YOUR_PUBLIC_BASE_URL with your PUBLIC_BASE_URL before upload.
+4) Configure Authentication:
+   - Type: API key
+   - Location: Header
+   - Name: Authorization
    - Value: Bearer <CONTEXT_API_TOKEN>
-4) Save
 
-## Step 4 — Add Instructions
-Paste:
-- adapters/chatgpt_actions/gpt_instructions.md
-into the GPT's Instructions.
+## Step 3: Test
+Use a query that should match your intel corpus:
+- "What are the latest signals on GPU supply constraints?"
 
-## How to use (day to day)
-Chat inside your Custom GPT as normal. For planning / architecture / repo artifact requests, it will:
-- call getContextPack first
-- expand sections only if needed
-- then answer with grounded output
+If results are empty, verify that:
+- the API is reachable from the public URL
+- the token is correct
+- intel articles are ingested and enriched
 
-## Keep ingestion separate
-For safety, the Action schema intentionally excludes write endpoints like ingest_urls.
-Do ingestion via curl/scripts/CLI and keep the GPT read-only.
-
-
-## Health checks
-- Public connectivity (no auth): `GET /health`
-- Readiness (DB reachable): `GET /ready`
-
-Use these to verify the tunnel and service before configuring the Action.
+## Read-only scope
+The schema only exposes read-only endpoints:
+- /v2/context/pack
+- /v2/intel/articles/{article_id}
+- /v2/intel/articles/{article_id}/outline
+- /v2/intel/articles/{article_id}/sections
+- /v2/intel/articles/{article_id}/chunks:search

@@ -44,6 +44,9 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 ## Worker
 - `docker compose run --rm api python -m app.intel.worker --once`
 
+## ChatGPT Actions
+- Setup guide: `docs/chatgpt_actions_setup.md`
+
 ## Quick commands
 - Setup: `cp .env.example .env`
 - Run: `docker compose up --build`

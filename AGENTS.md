@@ -9,7 +9,7 @@ MVP priority: Intel Digest connector and compact Context Packs for LLM reasoning
 We ship Option B: Intel-only packs under /v2, without touching existing /v1 projects/tasks behaviour.
 
 ## Current phase focus
-Phase 3: URL ingestion + fetch/extract + LLM enrichment (outline/summary/signals) feeding existing /v2 retrieval.
+Phase 4: ChatGPT Actions integration (read-only OpenAPI + deployment docs).
 
 ## Quick commands
 - Setup: `cp .env.example .env`
