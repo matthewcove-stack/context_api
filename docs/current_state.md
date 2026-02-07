@@ -7,12 +7,11 @@
 - Docker quickstart and tests exist
 
 ## MVP priority (now)
-Intel Digest + Context Pack serving (Option B: intel-only packs under /v2) is implemented and must remain stable.
+Add URL ingestion with fetch/extract and LLM enrichment, feeding the existing intel-only /v2 Context Pack.
 
 This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 
-## Implemented /v2 API surface (MVP)
-
+## Implemented /v2 API surface (stable)
 ### Context Pack
 - `POST /v2/context/pack`
   - Input:
@@ -33,33 +32,30 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 - `POST /v2/intel/articles/{article_id}/sections`
 - `POST /v2/intel/articles/{article_id}/chunks:search`
 
-### Ingestion (internal/admin)
-- `POST /v2/intel/ingest`
-  - MVP supports deterministic fixture ingestion (checked into repo)
-  - URL fetching can be added later
+### Ingestion (fixtures)
+- `POST /v2/intel/ingest` ingests checked-in fixtures into Postgres (deterministic).
+
+## Next to implement (Phase 3)
+### URL ingestion + LLM enrichment
+- `POST /v2/intel/ingest_urls`:
+  - accepts list of URLs; queues ingestion jobs; returns job_id/article_id per URL
+- Worker:
+  - fetch (bounded), extract, sectionise
+  - LLM enrichment produces: outline + summary + signals (each signal citeable to section_id)
+  - stores results into intel_articles + intel_article_sections
+- Status:
+  - `GET /v2/intel/articles/{article_id}` returns job/status and includes enrichment outputs when ready
 
 ## Storage (MVP)
-Intel tables (Postgres):
-- intel_articles
-  - metadata + derived (summary, outline, signals, outbound links)
-- intel_article_sections
-  - lossless section text (for expansion)
-Full-text indexes are in place for article search and section search.
+Current intel tables:
+- intel_articles (signals/summary/outline/topics)
+- intel_article_sections (content + FTS index)
 
-## Retrieval behaviour (MVP)
-Default:
-- Return only signals + short summary + citations (no raw full text).
-- Use Postgres full-text search + a simple re-ranker.
-- Enforce a token/size budget for the pack.
-
-Confidence gate:
-- Return retrieval_confidence and next_action.
-- If confidence is low, suggest refine_query or expand_sections.
-
-## Verification commands
-Must run in docker compose:
-- `docker compose up --build` (run)
-- `docker compose run --rm api pytest` (tests)
+Phase 3 extends intel_articles and adds intel_ingest_jobs to support URL ingestion and enrichment metadata.
 
 ## Drift prevention
-Any change to /v2 endpoints, schemas, or storage format must update this file and be mirrored in README.
+Whenever code changes meaningfully affect:
+- API contracts
+- schemas or migrations
+- verification commands
+update this file and mirror in README.
