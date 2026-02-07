@@ -3,14 +3,15 @@
 ## What works today
 - FastAPI + Postgres + Alembic
 - Authenticated v1 endpoints for searching mirrored Projects/Tasks
+- Intel fixture ingestion + /v2 Context Pack retrieval with progressive disclosure endpoints
 - Docker quickstart and tests exist
 
 ## MVP priority (now)
-Implement Intel Digest + Context Pack serving (Option B: intel-only packs under /v2).
+Intel Digest + Context Pack serving (Option B: intel-only packs under /v2) is implemented and must remain stable.
 
 This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 
-## Planned /v2 API surface (MVP)
+## Implemented /v2 API surface (MVP)
 
 ### Context Pack
 - `POST /v2/context/pack`
@@ -38,13 +39,12 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
   - URL fetching can be added later
 
 ## Storage (MVP)
-Add new intel tables (Postgres):
+Intel tables (Postgres):
 - intel_articles
   - metadata + derived (summary, outline, signals, outbound links)
 - intel_article_sections
   - lossless section text (for expansion)
-Optionally (if needed in MVP):
-- intel_article_chunks (skip if section-level search is enough)
+Full-text indexes are in place for article search and section search.
 
 ## Retrieval behaviour (MVP)
 Default:

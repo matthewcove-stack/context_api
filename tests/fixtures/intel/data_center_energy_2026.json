@@ -1,0 +1,54 @@
+{
+  "metadata": {
+    "article_id": "intel_2026_energy_datacenters",
+    "url": "https://example.com/intel/datacenter-energy-2026",
+    "title": "Data center energy caps reshape expansion plans",
+    "publisher": "InfraWatch",
+    "author": "Casey Morgan",
+    "published_at": "2026-02-01T08:30:00Z",
+    "topics": ["energy", "datacenters", "policy"]
+  },
+  "summary": "New regional energy caps and permitting delays are pushing operators to stagger build-outs and prioritize retrofits. Operators are negotiating on-site generation and demand response contracts.",
+  "signals": [
+    {
+      "claim": "Energy caps are delaying 2026 campus expansions.",
+      "why": "Grid operators are enforcing stricter peak load thresholds in multiple regions.",
+      "cite": {"section_id": "policy"}
+    },
+    {
+      "claim": "Retrofit budgets are rising faster than greenfield builds.",
+      "why": "Operators prefer to lift capacity by upgrading cooling and power distribution in existing halls.",
+      "tradeoff": "Retrofits reduce permitting risk but slow total capacity growth.",
+      "cite": {"section_id": "retrofits"}
+    }
+  ],
+  "outline": [
+    {"section_id": "policy", "heading": "Policy shift", "blurb": "Energy caps and permitting."},
+    {"section_id": "retrofits", "heading": "Retrofit wave", "blurb": "Capacity gains from upgrades."},
+    {"section_id": "contracts", "heading": "Energy contracts", "blurb": "On-site generation and demand response."}
+  ],
+  "sections": [
+    {
+      "section_id": "policy",
+      "heading": "Policy shift",
+      "content": "Regional grid operators are imposing stricter peak load thresholds, leading to longer approval timelines for new data center campuses. Operators are revising timelines and breaking projects into smaller phases.",
+      "rank": 1
+    },
+    {
+      "section_id": "retrofits",
+      "heading": "Retrofit wave",
+      "content": "Operators are investing in liquid cooling and higher-efficiency UPS systems to unlock additional capacity in existing buildings. These retrofits are capital intensive but avoid multi-year permitting delays.",
+      "rank": 2
+    },
+    {
+      "section_id": "contracts",
+      "heading": "Energy contracts",
+      "content": "To secure power, operators are negotiating on-site generation and demand response agreements that prioritize flexible loads during peak demand windows.",
+      "rank": 3
+    }
+  ],
+  "outbound_links": [
+    "https://example.com/intel/energy-cap-policy",
+    "https://example.com/intel/cooling-retrofit-guide"
+  ]
+}

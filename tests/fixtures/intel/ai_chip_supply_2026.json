@@ -1,0 +1,66 @@
+{
+  "metadata": {
+    "article_id": "intel_2026_chip_supply",
+    "url": "https://example.com/intel/chip-supply-2026",
+    "title": "Chip supply tightens as AI accelerators surge",
+    "publisher": "TechWire",
+    "author": "Jordan Lee",
+    "published_at": "2026-01-20T10:00:00Z",
+    "topics": ["semiconductors", "supply-chain", "ai"]
+  },
+  "summary": "Manufacturers report extended lead times for advanced GPU and HBM stacks as hyperscalers expand AI clusters. Contract pricing is rising, but second-source efforts are starting to blunt the worst shortages.",
+  "signals": [
+    {
+      "claim": "Lead times for advanced accelerators have climbed above 20 weeks.",
+      "why": "Foundries and packaging lines are fully allocated into mid-2026, with backlogs concentrated on high-bandwidth memory stacks.",
+      "tradeoff": "Longer lead times improve vendor visibility but increase risk of missed deployment windows.",
+      "cite": {"section_id": "supply"}
+    },
+    {
+      "claim": "Cloud buyers are shifting to smaller, more frequent orders.",
+      "why": "Procurement teams want flexibility while supply conditions remain volatile.",
+      "cite": {"section_id": "procurement"}
+    },
+    {
+      "claim": "Second-source qualification is accelerating.",
+      "why": "Platform teams are adding alternative boards to reduce single-vendor exposure.",
+      "cite": {"section_id": "mitigation"}
+    }
+  ],
+  "outline": [
+    {"section_id": "overview", "heading": "Overview", "blurb": "Demand pressures and allocation limits."},
+    {"section_id": "supply", "heading": "Supply constraints", "blurb": "Lead times and capacity bottlenecks."},
+    {"section_id": "procurement", "heading": "Procurement shifts", "blurb": "Contract structure changes."},
+    {"section_id": "mitigation", "heading": "Mitigation plans", "blurb": "Second-source and design changes."}
+  ],
+  "sections": [
+    {
+      "section_id": "overview",
+      "heading": "Overview",
+      "content": "Demand for AI accelerators continues to outpace supply as hyperscalers expand clusters. Vendors report that allocation remains tight across GPU, interposer, and HBM supply chains.",
+      "rank": 1
+    },
+    {
+      "section_id": "supply",
+      "heading": "Supply constraints",
+      "content": "Lead times for advanced accelerators now exceed 20 weeks. Packaging and HBM stacks are the primary bottlenecks, with foundries signaling fully booked capacity into mid-2026.",
+      "rank": 2
+    },
+    {
+      "section_id": "procurement",
+      "heading": "Procurement shifts",
+      "content": "Buyers are moving from annual commitments to smaller, rolling orders. This reduces exposure if delivery schedules slip but requires closer inventory planning.",
+      "rank": 3
+    },
+    {
+      "section_id": "mitigation",
+      "heading": "Mitigation plans",
+      "content": "Platform teams are qualifying alternate boards and exploring mixed-precision deployments to soften the impact of constrained supply.",
+      "rank": 4
+    }
+  ],
+  "outbound_links": [
+    "https://example.com/intel/chip-supply-brief",
+    "https://example.com/intel/hbm-capacity-tracker"
+  ]
+}
