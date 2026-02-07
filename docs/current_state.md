@@ -5,34 +5,61 @@
 - Authenticated v1 endpoints for searching mirrored Projects/Tasks
 - Docker quickstart and tests exist
 
-## What is incomplete / Phase 1 expectations
-For Phase 1, context_api may be used opportunistically, but it is not a hard dependency for the vertical slice.
-If enabled:
-- Searches must be fast and return compact, predictable shapes.
-- Sync script should be runnable manually to refresh context from notion_gateway.
+## MVP priority (now)
+Implement Intel Digest + Context Pack serving (Option B: intel-only packs under /v2).
 
-## Phase 1 scope (exact)
+This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 
-Goal: a single end-to-end vertical slice that reliably turns a natural-language intent into a Notion Task create/update, with an audit trail.
+## Planned /v2 API surface (MVP)
 
-In scope:
-- Submit intent (via action_relay client or curl) to intent_normaliser `POST /v1/intents`.
-- intent_normaliser normalises into a deterministic plan (`notion.tasks.create` or `notion.tasks.update`).
-- If `EXECUTE_ACTIONS=true` and confidence >= threshold, intent_normaliser executes the plan by calling notion_gateway:
-  - `POST /v1/notion/tasks/create` or `POST /v1/notion/tasks/update`
-- Write artifacts for: received → normalised → executed (or failed) with stable IDs.
-- Idempotency: duplicate submissions with the same `request_id` (or generated deterministic key) must not create duplicate Notion tasks.
-- Error handling: gateway errors are surfaced in the response and recorded as artifacts.
-- Minimal context lookups:
-  - Optional: query context_api for project/task hints when provided, but Phase 1 must still work without context_api being “perfect”.
+### Context Pack
+- `POST /v2/context/pack`
+  - Input:
+    - query: string
+    - topics?: string[]
+    - token_budget?: int
+    - recency_days?: int
+    - max_items?: int
+  - Output:
+    - pack:
+      - items[]: { article_id, title, url, signals[], summary, citations[] }
+    - retrieval_confidence: "high" | "med" | "low"
+    - next_action: "proceed" | "refine_query" | "expand_sections"
+    - trace: { trace_id, retrieved_article_ids[], timing_ms }
 
-Out of scope (Phase 2+):
-- UI for clarifications (API-only is fine).
-- Calendar events / reminders.
-- Full automated background sync from Notion.
-- Multi-user, permissions, or “agents” beyond single operator.
+### Progressive disclosure
+- `GET /v2/intel/articles/{article_id}/outline`
+- `POST /v2/intel/articles/{article_id}/sections`
+- `POST /v2/intel/articles/{article_id}/chunks:search`
 
+### Ingestion (internal/admin)
+- `POST /v2/intel/ingest`
+  - MVP supports deterministic fixture ingestion (checked into repo)
+  - URL fetching can be added later
+
+## Storage (MVP)
+Add new intel tables (Postgres):
+- intel_articles
+  - metadata + derived (summary, outline, signals, outbound links)
+- intel_article_sections
+  - lossless section text (for expansion)
+Optionally (if needed in MVP):
+- intel_article_chunks (skip if section-level search is enough)
+
+## Retrieval behaviour (MVP)
+Default:
+- Return only signals + short summary + citations (no raw full text).
+- Use Postgres full-text search + a simple re-ranker.
+- Enforce a token/size budget for the pack.
+
+Confidence gate:
+- Return retrieval_confidence and next_action.
+- If confidence is low, suggest refine_query or expand_sections.
 
 ## Verification commands
-- Tests (Docker):
-  - `docker compose run --rm api pytest`
+Must run in docker compose:
+- `docker compose up --build` (run)
+- `docker compose run --rm api pytest` (tests)
+
+## Drift prevention
+Any change to /v2 endpoints, schemas, or storage format must update this file and be mirrored in README.

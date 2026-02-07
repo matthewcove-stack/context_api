@@ -1,19 +1,23 @@
-# Phase Execution Prompt (Canonical)
+# Phase execution prompt (copy/paste into Codex)
 
-You are implementing the requested phase ONLY.
+You are implementing ONLY the requested phase from docs/phases.md.
+Obey docs/codex_rules.md and the truth hierarchy: docs/current_state.md is authoritative.
 
-Rules:
-- Do not implement future phases.
-- Do not refactor unrelated code.
-- Follow docs/intent.md.
-- Update docs/current_state.md after changes.
-- Use the smallest safe assumptions; document them.
-- If verification fails twice, stop and report.
+## Requested phase
+Phase 2 (MVP priority) — Intel connector + Context Packs (Option B)
 
-## Mandatory enforcement (Drift Guard MCP)
-Before claiming completion, call these MCP tools and ensure ok=true:
-- repo_contract_validate()
-- verify_run(profile="default")
-- drift_check()
+## Requirements
+- Do NOT modify /v1 behaviour or response schemas.
+- Add /v2 intel ingestion + retrieval + expansion endpoints.
+- Add Alembic migrations for new intel tables.
+- Add deterministic fixtures under tests/fixtures/intel/ and an ingestion script.
+- Add tests covering ingest + pack + expansion.
+- Ensure everything runs in docker compose:
+  - `docker compose up --build`
+  - `docker compose run --rm api pytest`
 
-Include the returned JSON in your final phase report.
+## Output format
+1) List files changed/added.
+2) Commands run + results.
+3) Any assumptions (only if necessary).
+4) Update docs/current_state.md and mirror README.
