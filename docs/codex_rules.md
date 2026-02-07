@@ -30,3 +30,9 @@
   - use a local HTTP fixture server for URL fetch
   - mock the LLM client
   - ingest -> enrich -> /v2/context/pack -> expansion endpoint assertions
+
+
+## Actions / external access
+- Keep the Actions OpenAPI schema read-only by default (no ingest endpoints).
+- Prefer Cloudflare Tunnel for HTTPS exposure.
+- Never log CONTEXT_API_TOKEN or tunnel token.

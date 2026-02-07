@@ -48,3 +48,13 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 - Setup: `cp .env.example .env`
 - Run: `docker compose up --build`
 - Tests: `docker compose run --rm api pytest`
+
+
+## ChatGPT integration (Custom GPT + Actions)
+- See docs/chatgpt_actions_setup.md
+- OpenAPI schema: adapters/chatgpt_actions/openapi.yaml
+
+
+## Health endpoints
+- `GET /health` liveness probe (no auth)
+- `GET /ready` readiness probe (checks DB)

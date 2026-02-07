@@ -1,0 +1,172 @@
+openapi: 3.0.3
+info:
+  title: Lambic Labs Context API
+  version: "1.0"
+servers:
+  # Replace with your public HTTPS base URL (Cloudflare Tunnel / VPS), e.g. https://kb.lambiclabs.com
+  - url: https://YOUR_PUBLIC_CONTEXT_API_BASE_URL
+paths:
+/health:
+  get:
+    operationId: getHealth
+    summary: Health check (no auth)
+    responses:
+      "200":
+        description: OK
+        content:
+          application/json:
+            schema:
+              type: object
+/ready:
+  get:
+    operationId: getReady
+    summary: Readiness check (DB reachable)
+    security:
+      - bearerAuth: []
+    responses:
+      "200":
+        description: Ready
+        content:
+          application/json:
+            schema:
+              type: object
+      "503":
+        description: Not ready
+        content:
+          application/json:
+            schema:
+              type: object
+
+  /v2/context/pack:
+    post:
+      operationId: getContextPack
+      summary: Retrieve a compact intel-only context pack for a query
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+                topics:
+                  type: array
+                  items: { type: string }
+                tags:
+                  type: array
+                  items: { type: string }
+                token_budget:
+                  type: integer
+                  minimum: 200
+                  maximum: 4000
+                  description: Soft budget for pack size. The server enforces its own bounds.
+                recency_days:
+                  type: integer
+                  minimum: 1
+                  maximum: 3650
+                max_items:
+                  type: integer
+                  minimum: 1
+                  maximum: 20
+      responses:
+        "200":
+          description: Context pack
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /v2/intel/articles/{article_id}/outline:
+    get:
+      operationId: getIntelOutline
+      summary: Get outline for an intel article
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: article_id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Outline
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /v2/intel/articles/{article_id}/sections:
+    post:
+      operationId: getIntelSections
+      summary: Fetch specific sections for an intel article (progressive disclosure)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: article_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                section_ids:
+                  type: array
+                  items: { type: string }
+                max_chars:
+                  type: integer
+                  minimum: 200
+                  maximum: 20000
+      responses:
+        "200":
+          description: Sections
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /v2/intel/articles/{article_id}/chunks:search:
+    post:
+      operationId: searchIntelChunks
+      summary: Search within a single intel article
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: article_id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+                limit:
+                  type: integer
+                  minimum: 1
+                  maximum: 20
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer

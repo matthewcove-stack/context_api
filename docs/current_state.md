@@ -58,3 +58,14 @@ Whenever code changes meaningfully affect:
 - schemas or migrations
 - verification commands
 update this file and mirror in README.
+
+
+## ChatGPT Actions integration (Plus plan)
+- This service can be used as an external knowledge base for ChatGPT via a Custom GPT with Actions.
+- See: docs/chatgpt_actions_setup.md and adapters/chatgpt_actions/
+- Expose the API over HTTPS (recommended: Cloudflare Tunnel). See: docs/deployment/cloudflare_tunnel.md
+
+
+## Health endpoints
+- `GET /health` liveness probe (no auth)
+- `GET /ready` readiness probe (checks DB)

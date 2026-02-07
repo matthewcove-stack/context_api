@@ -39,3 +39,8 @@ Phase 3: URL ingestion + fetch/extract + LLM enrichment (outline/summary/signals
 - `docker-compose.yml` unless needed for behaviour changes
 - Alembic: prefer generated migrations and keep them small and reviewable
 - Do not modify /v1 endpoints or response shapes
+
+
+## Phase 4 (ChatGPT Actions)
+- Files under adapters/chatgpt_actions/ are used to configure a Custom GPT Action.
+- docs/deployment/cloudflare_tunnel.md describes the recommended HTTPS exposure path.

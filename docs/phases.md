@@ -71,3 +71,17 @@ Exit criteria:
 - Fixture URL ingestion works end-to-end (via local test server)
 - LLM enrichment output is stored and used by /v2/context/pack
 - /v1 behaviour unchanged
+
+
+## Phase 4 — ChatGPT Actions integration (deployment + OpenAPI assets)
+Goal: make the knowledge base usable from ChatGPT UI (Plus plan) via a Custom GPT with Actions.
+
+Deliverables:
+- OpenAPI schema limited to read-only endpoints for /v2 context pack + expansion.
+- Custom GPT instruction block that enforces 'pack first' behavior.
+- Deployment guidance for public HTTPS via Cloudflare Tunnel.
+- docker-compose override for cloudflared.
+
+Exit criteria:
+- Public URL reachable over HTTPS.
+- Custom GPT can successfully call getContextPack and expansion endpoints using bearer auth.

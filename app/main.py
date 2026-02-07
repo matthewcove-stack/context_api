@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import text
 
 from app.config import Settings, settings as default_settings
 from app.models import (
