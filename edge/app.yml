@@ -1,0 +1,6 @@
+app: context-api
+entry_service: api
+entry_port: 8001
+dev_hostnames:
+- context-api.localhost
+prod_hostnames: []

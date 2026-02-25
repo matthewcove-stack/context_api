@@ -76,3 +76,8 @@ update this file and mirror in README.
 ## Health endpoints
 - `GET /health` liveness probe (no auth)
 - `GET /ready` readiness probe (checks DB)
+
+## Edge Integration
+- Entry service: `api` on `8001`
+- Dev route: `http://context-api.localhost`
+- Run with `make dev` (shared edge + compose.edge.yml).

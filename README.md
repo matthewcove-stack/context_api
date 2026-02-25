@@ -61,3 +61,10 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 ## Health endpoints
 - `GET /health` liveness probe (no auth)
 - `GET /ready` readiness probe (checks DB)
+
+## Edge Dev
+- `make dev`
+- `http://context-api.localhost`
+- `docs/current_state.md` (authoritative)
+- `docs/edge_integration.md`
+
