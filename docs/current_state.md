@@ -109,7 +109,7 @@
   - DR runbook is documented in `docs/research_operations.md`
 
 ## Actions integration status
-- ChatGPT Actions assets currently expose read-only intel retrieval endpoints:
+- ChatGPT Actions assets currently expose read-only intel + research retrieval endpoints:
   - `adapters/chatgpt_actions/openapi.yaml`
   - `adapters/chatgpt_actions/gpt_instructions.md`
 - HTTPS exposure guidance:

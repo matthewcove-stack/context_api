@@ -215,6 +215,181 @@ components:
         last_error:
           type: string
       required: [article_id, url, status, topics]
+    ResearchContextPackRequest:
+      type: object
+      properties:
+        query:
+          type: string
+        topic_key:
+          type: string
+        source_ids:
+          type: array
+          items:
+            type: string
+        token_budget:
+          type: integer
+        recency_days:
+          type: integer
+        max_items:
+          type: integer
+        min_relevance_score:
+          type: number
+      required: [query, topic_key]
+    ResearchCitation:
+      type: object
+      properties:
+        document_id:
+          type: string
+        chunk_id:
+          type: string
+      required: [document_id, chunk_id]
+    ResearchScoreBreakdown:
+      type: object
+      properties:
+        total:
+          type: number
+        lexical:
+          type: number
+        embedding:
+          type: number
+        recency:
+          type: number
+        source_weight:
+          type: number
+      required: [total, lexical, embedding, recency, source_weight]
+    ResearchSignal:
+      type: object
+      properties:
+        claim:
+          type: string
+        why:
+          type: string
+        cite:
+          $ref: "#/components/schemas/ResearchCitation"
+      required: [claim, why, cite]
+    ResearchContextPackItem:
+      type: object
+      properties:
+        document_id:
+          type: string
+        source_id:
+          type: string
+        title:
+          type: string
+        canonical_url:
+          type: string
+        published_at:
+          type: string
+        summary:
+          type: string
+        signals:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResearchSignal"
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResearchCitation"
+        score_breakdown:
+          $ref: "#/components/schemas/ResearchScoreBreakdown"
+      required: [document_id, source_id, title, canonical_url, summary, signals, citations, score_breakdown]
+    ResearchContextPackResponse:
+      type: object
+      properties:
+        pack:
+          type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/ResearchContextPackItem"
+        retrieval_confidence:
+          type: string
+          enum: [high, med, low]
+        next_action:
+          type: string
+          enum: [proceed, refine_query, expand_sections]
+        trace:
+          type: object
+          properties:
+            trace_id:
+              type: string
+            retrieved_document_ids:
+              type: array
+              items:
+                type: string
+            timing_ms:
+              type: object
+          required: [trace_id, retrieved_document_ids]
+      required: [pack, retrieval_confidence, next_action, trace]
+    ResearchChunkSearchRequest:
+      type: object
+      properties:
+        query:
+          type: string
+        max_chars:
+          type: integer
+        max_chunks:
+          type: integer
+      required: [query]
+    ResearchChunkSearchResponse:
+      type: object
+      properties:
+        document_id:
+          type: string
+        chunks:
+          type: array
+          items:
+            type: object
+            properties:
+              chunk_id:
+                type: string
+              snippet:
+                type: string
+              score:
+                type: number
+            required: [chunk_id, snippet]
+      required: [document_id, chunks]
+    ResearchOpsSummaryResponse:
+      type: object
+      properties:
+        topic_key:
+          type: string
+        sources_total:
+          type: integer
+        sources_enabled:
+          type: integer
+        sources_in_cooldown:
+          type: integer
+        documents_total:
+          type: integer
+        documents_embedded:
+          type: integer
+        documents_failed:
+          type: integer
+        runs_open:
+          type: integer
+        runs_failed_24h:
+          type: integer
+        run_failure_rate_24h:
+          type: number
+        retrieval_queries_24h:
+          type: integer
+        retrieval_errors_24h:
+          type: integer
+      required:
+        - topic_key
+        - sources_total
+        - sources_enabled
+        - sources_in_cooldown
+        - documents_total
+        - documents_embedded
+        - documents_failed
+        - runs_open
+        - runs_failed_24h
+        - run_failure_rate_24h
+        - retrieval_queries_24h
+        - retrieval_errors_24h
 paths:
   /v2/context/pack:
     post:
@@ -323,3 +498,66 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ChunkSearchResponse"
+  /v2/research/context/pack:
+    post:
+      summary: Retrieve a context pack from research documents
+      operationId: researchContextPack
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResearchContextPackRequest"
+      responses:
+        "200":
+          description: Research context pack response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResearchContextPackResponse"
+  /v2/research/documents/{document_id}/chunks:search:
+    post:
+      summary: Search chunks within a research document
+      operationId: searchResearchDocumentChunks
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: document_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResearchChunkSearchRequest"
+      responses:
+        "200":
+          description: Research chunk search response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResearchChunkSearchResponse"
+  /v2/research/ops/summary:
+    get:
+      summary: Get research pipeline ops summary for a topic
+      operationId: getResearchOpsSummary
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: topic_key
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Research ops summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResearchOpsSummaryResponse"
