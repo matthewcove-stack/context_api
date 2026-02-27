@@ -1624,3 +1624,48 @@ def get_research_ops_summary(
     with engine.begin() as conn:
         row = conn.execute(text(sql), {"topic_key": topic_key}).mappings().first()
     return dict(row) if row else {}
+
+
+def list_research_source_metrics(
+    engine: Engine,
+    *,
+    topic_key: str,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    sql = """
+        SELECT
+            s.source_id,
+            s.name,
+            s.enabled,
+            p.last_polled_at,
+            p.consecutive_failures,
+            p.cooldown_until,
+            p.last_error,
+            count(d.document_id) AS documents_total,
+            count(*) FILTER (WHERE d.status = 'embedded') AS documents_embedded,
+            count(*) FILTER (WHERE d.status = 'failed') AS documents_failed,
+            (
+                SELECT count(*)
+                FROM research_query_logs q
+                WHERE q.topic_key = s.topic_key
+                  AND q.created_at >= now() - interval '24 hours'
+            ) AS retrieval_queries_24h
+        FROM research_sources s
+        JOIN research_source_policies p ON p.source_id = s.source_id
+        LEFT JOIN research_documents d ON d.source_id = s.source_id
+        WHERE s.topic_key = :topic_key
+        GROUP BY
+            s.source_id,
+            s.name,
+            s.enabled,
+            p.last_polled_at,
+            p.consecutive_failures,
+            p.cooldown_until,
+            p.last_error
+        ORDER BY documents_total DESC, s.created_at ASC
+        LIMIT :limit
+    """
+    params = {"topic_key": topic_key, "limit": max(limit, 1)}
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), params).mappings().all()
+    return [dict(row) for row in rows]

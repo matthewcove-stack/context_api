@@ -24,6 +24,7 @@
   - Retrieval uses hybrid scoring (`lexical`, `embedding`, `recency`, `source_weight`).
   - Feedback capture endpoint persists operator judgments.
   - Ops summary endpoint exposes ingestion/retrieval counters.
+  - Source metrics endpoint exposes per-source failure/throughput status.
 - Phase 6 production hardening:
   - Source failure counters and automatic cooldown (`consecutive_failures`, `cooldown_until`).
   - Schedule enqueue honors cooldown to prevent hot-loop retries.
@@ -71,6 +72,7 @@
 ### New `/v2` research phase 5 governance/ops
 - `POST /v2/research/retrieval/feedback`
 - `GET /v2/research/ops/summary?topic_key=...`
+- `GET /v2/research/ops/sources?topic_key=...&limit=...`
 
 ### Existing `/v1` sync/search
 - `POST /v1/projects/sync`

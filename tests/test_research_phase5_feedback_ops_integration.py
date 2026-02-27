@@ -157,4 +157,11 @@ def test_phase5_feedback_and_ops_summary() -> None:
     assert payload["sources_total"] >= 1
     assert payload["documents_total"] >= 1
     assert payload["retrieval_queries_24h"] >= 1
+
+    sources = client.get(f"/v2/research/ops/sources?topic_key={topic_key}&limit=5", headers=headers)
+    assert sources.status_code == 200
+    source_items = sources.json()["items"]
+    assert source_items
+    assert source_items[0]["source_id"] == source_id
+    assert source_items[0]["documents_total"] >= 1
     server.shutdown()

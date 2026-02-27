@@ -27,6 +27,8 @@ from app.research.contracts import (
     ResearchIngestRunStatusResponse,
     ResearchRunCounters,
     ResearchOpsSummaryResponse,
+    ResearchSourceMetricRecord,
+    ResearchSourceMetricsResponse,
     ResearchScoreBreakdown,
     ResearchSignal,
     ResearchSourceListResponse,
@@ -82,6 +84,7 @@ from app.storage.db import (
     insert_research_relevance_scores,
     insert_research_retrieval_feedback,
     get_research_ops_summary,
+    list_research_source_metrics,
     search_research_chunks,
     search_research_document_chunks,
     search_projects,
@@ -1039,6 +1042,36 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
             retrieval_queries_24h=int(summary.get("retrieval_queries_24h") or 0),
             retrieval_errors_24h=int(summary.get("retrieval_errors_24h") or 0),
         )
+
+    @app.get("/v2/research/ops/sources", response_model=ResearchSourceMetricsResponse)
+    def research_ops_sources_endpoint(
+        topic_key: str,
+        limit: int = 20,
+        _: None = Depends(require_bearer),
+    ) -> ResearchSourceMetricsResponse:
+        normalized_topic = topic_key.strip().lower()
+        rows = list_research_source_metrics(
+            app.state.engine,
+            topic_key=normalized_topic,
+            limit=limit,
+        )
+        items = [
+            ResearchSourceMetricRecord(
+                source_id=str(row.get("source_id") or ""),
+                name=str(row.get("name") or ""),
+                enabled=bool(row.get("enabled", True)),
+                last_polled_at=row.get("last_polled_at"),
+                consecutive_failures=int(row.get("consecutive_failures") or 0),
+                cooldown_until=row.get("cooldown_until"),
+                last_error=(str(row.get("last_error")) if row.get("last_error") else None),
+                documents_total=int(row.get("documents_total") or 0),
+                documents_embedded=int(row.get("documents_embedded") or 0),
+                documents_failed=int(row.get("documents_failed") or 0),
+                retrieval_queries_24h=int(row.get("retrieval_queries_24h") or 0),
+            )
+            for row in rows
+        ]
+        return ResearchSourceMetricsResponse(topic_key=normalized_topic, items=items)
 
     return app
 

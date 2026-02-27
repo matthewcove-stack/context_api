@@ -80,3 +80,20 @@ Response includes:
 - open/failed run counters
 - 24h run failure rate
 - retrieval query/error counters (24h)
+
+## Endpoint: `GET /v2/research/ops/sources?topic_key=...&limit=...`
+
+Response:
+- `topic_key`
+- `items[]`:
+  - `source_id`
+  - `name`
+  - `enabled`
+  - `last_polled_at`
+  - `consecutive_failures`
+  - `cooldown_until`
+  - `last_error`
+  - `documents_total`
+  - `documents_embedded`
+  - `documents_failed`
+  - `retrieval_queries_24h`

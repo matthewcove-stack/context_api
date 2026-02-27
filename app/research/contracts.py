@@ -192,3 +192,22 @@ class ResearchOpsSummaryResponse(BaseModel):
     run_failure_rate_24h: float = 0.0
     retrieval_queries_24h: int = 0
     retrieval_errors_24h: int = 0
+
+
+class ResearchSourceMetricRecord(BaseModel):
+    source_id: str
+    name: str
+    enabled: bool
+    last_polled_at: Optional[datetime] = None
+    consecutive_failures: int = 0
+    cooldown_until: Optional[datetime] = None
+    last_error: Optional[str] = None
+    documents_total: int = 0
+    documents_embedded: int = 0
+    documents_failed: int = 0
+    retrieval_queries_24h: int = 0
+
+
+class ResearchSourceMetricsResponse(BaseModel):
+    topic_key: str
+    items: List[ResearchSourceMetricRecord] = Field(default_factory=list)

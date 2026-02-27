@@ -54,6 +54,7 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 ## Research Phase 5 scoring + ops
 - `POST /v2/research/retrieval/feedback`
 - `GET /v2/research/ops/summary?topic_key=<topic>`
+- `GET /v2/research/ops/sources?topic_key=<topic>&limit=<n>`
 
 ## Research Phase 6 hardening controls
 - `RESEARCH_SOURCE_FAILURE_THRESHOLD` (default `3`)

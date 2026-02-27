@@ -390,6 +390,50 @@ components:
         - run_failure_rate_24h
         - retrieval_queries_24h
         - retrieval_errors_24h
+    ResearchSourceMetricItem:
+      type: object
+      properties:
+        source_id:
+          type: string
+        name:
+          type: string
+        enabled:
+          type: boolean
+        last_polled_at:
+          type: string
+        consecutive_failures:
+          type: integer
+        cooldown_until:
+          type: string
+        last_error:
+          type: string
+        documents_total:
+          type: integer
+        documents_embedded:
+          type: integer
+        documents_failed:
+          type: integer
+        retrieval_queries_24h:
+          type: integer
+      required:
+        - source_id
+        - name
+        - enabled
+        - consecutive_failures
+        - documents_total
+        - documents_embedded
+        - documents_failed
+        - retrieval_queries_24h
+    ResearchSourceMetricsResponse:
+      type: object
+      properties:
+        topic_key:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResearchSourceMetricItem"
+      required: [topic_key, items]
 paths:
   /v2/context/pack:
     post:
@@ -561,3 +605,27 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ResearchOpsSummaryResponse"
+  /v2/research/ops/sources:
+    get:
+      summary: Get per-source research pipeline metrics for a topic
+      operationId: getResearchSourceMetrics
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: topic_key
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Research source metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResearchSourceMetricsResponse"

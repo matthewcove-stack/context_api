@@ -21,4 +21,7 @@ Suggested flow:
    - POST /v2/intel/articles/{article_id}/sections
    - POST /v2/intel/articles/{article_id}/chunks:search
    - POST /v2/research/documents/{document_id}/chunks:search
-3) Summarize using signals and cite pointers returned by the API.
+3) If the user asks for pipeline health, call:
+   - GET /v2/research/ops/summary
+   - GET /v2/research/ops/sources
+4) Summarize using signals and cite pointers returned by the API.
