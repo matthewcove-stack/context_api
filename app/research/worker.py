@@ -8,6 +8,7 @@ import time
 from typing import Any, Dict, List
 
 from app.intel.fetch import fetch_url
+from app.intel.extract import extract_readable_text
 from app.research.discovery import discover_candidate_items, extract_title_from_html, is_allowed_by_robots
 from app.research.ids import compute_document_id
 from app.storage.db import (
@@ -20,6 +21,7 @@ from app.storage.db import (
     list_research_sources,
     mark_research_document_failed,
     mark_research_document_fetched,
+    mark_research_document_extracted,
     mark_research_ingestion_run_finished,
     set_research_source_polled,
     update_research_run_counters,
@@ -179,6 +181,37 @@ def _process_source(
                 "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "warnings": ["truncated"] if item_fetch.get("truncated") else [],
             },
+        )
+
+        extraction = extract_readable_text(raw_payload, item_url)
+        extracted_text = str(extraction.get("text") or "").strip()
+        if not extracted_text:
+            counters["failed"] += 1
+            mark_research_document_failed(
+                engine,
+                document_id=document_id,
+                fetch_meta={
+                    "http_status": item_status,
+                    "content_type": (item_fetch.get("headers") or {}).get("content-type"),
+                    "error": "empty extracted text",
+                },
+            )
+            append_research_run_error(
+                engine,
+                run_id=run_id,
+                message=f"extraction_failed source_id={source_id} url={item_url}",
+            )
+            continue
+        mark_research_document_extracted(
+            engine,
+            document_id=document_id,
+            extracted_text=extracted_text,
+            extraction_meta={
+                "method": extraction.get("method"),
+                "confidence": extraction.get("confidence"),
+                "warnings": extraction.get("warnings") or [],
+            },
+            published_at=extraction.get("published_at"),
         )
 
     set_research_source_polled(engine, source_id=source_id)

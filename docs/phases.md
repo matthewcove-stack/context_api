@@ -78,7 +78,7 @@ Definition of done:
 - New item discovery is idempotent per canonical URL/external id.
 - Raw fetch payload and run audit records are persisted.
 
-### Phase 2 — Extraction and normalization
+### Phase 2 — Extraction and normalization (implemented)
 Scope:
 - Convert raw content into normalized extracted text and structured metadata.
 

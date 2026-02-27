@@ -10,6 +10,9 @@
   - Source catalogue upsert/list under `/v2/research/sources*`.
   - Ingestion run queue/status under `/v2/research/ingest/*`.
   - Worker-driven source fetch/discovery with deterministic dedupe and raw payload storage.
+- Phase 2 research extraction:
+  - Worker extracts normalized text from fetched payloads.
+  - Extraction provenance is persisted in `research_documents.extraction_meta`.
 - Dockerized test workflow (`docker compose run --rm api pytest`).
 
 ## Implemented in this phase
@@ -23,6 +26,7 @@
   - discovers candidate URLs from feeds/sitemaps/html listings
   - applies deterministic document identity + dedupe
   - fetches and stores raw payload + fetch metadata
+  - extracts readable text with bounded extractor metadata
   - records run counters and bounded errors
 - Added readiness endpoint:
   - `GET /ready`
@@ -61,6 +65,7 @@
 - `research_source_policies`
 - `research_ingestion_runs`
 - `research_documents`
+  - includes `extracted_text` and `extracted_at` (Phase 2)
 
 ## Current worker model
 - Intel worker command:
@@ -69,7 +74,7 @@
   - `docker compose run --rm api python -m app.research.worker --once`
 
 ## Gaps against the research ingestion target
-- No extraction/chunk/embedding/vector stage for research documents yet (Phase 2+).
+- No chunk/embedding/vector stage for research documents yet (Phase 3+).
 - No dedicated `/v2/research/context/pack` retrieval endpoints yet (Phase 4+).
 - No retrieval query log table yet.
 - Governance controls are baseline only:

@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.main import create_app
 from app.research.worker import enqueue_due_schedule_runs, run_once
-from app.storage.db import count_research_documents, create_db_engine
+from app.storage.db import count_research_documents, count_research_documents_by_status, create_db_engine
 
 
 class _ResearchFixtureHandler(BaseHTTPRequestHandler):
@@ -164,6 +164,7 @@ def test_phase1_manual_run_ingests_and_dedupes() -> None:
     assert payload["counters"]["items_deduped"] >= 1
 
     assert count_research_documents(engine, source_id=source_id) == 2
+    assert count_research_documents_by_status(engine, source_id=source_id, status="extracted") == 2
     server.shutdown()
 
 

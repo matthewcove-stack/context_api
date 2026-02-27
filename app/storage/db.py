@@ -973,6 +973,29 @@ def mark_research_document_fetched(
         )
 
 
+def mark_research_document_extracted(
+    engine: Engine,
+    *,
+    document_id: str,
+    extracted_text: str,
+    extraction_meta: Dict[str, Any],
+    published_at: Optional[Any] = None,
+) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            research_documents.update()
+            .where(research_documents.c.document_id == document_id)
+            .values(
+                extracted_text=extracted_text,
+                extraction_meta=extraction_meta,
+                published_at=published_at,
+                status="extracted",
+                extracted_at=text("now()"),
+                updated_at=text("now()"),
+            )
+        )
+
+
 def mark_research_document_failed(
     engine: Engine,
     *,
@@ -988,6 +1011,18 @@ def mark_research_document_failed(
             .where(research_documents.c.document_id == document_id)
             .values(**values)
         )
+
+
+def get_research_document(
+    engine: Engine,
+    *,
+    document_id: str,
+) -> Optional[Dict[str, Any]]:
+    with engine.begin() as conn:
+        row = conn.execute(
+            select(research_documents).where(research_documents.c.document_id == document_id)
+        ).mappings().first()
+    return dict(row) if row else None
 
 
 def list_due_research_sources(engine: Engine) -> List[Dict[str, Any]]:
@@ -1033,4 +1068,21 @@ def count_research_documents(
     """
     with engine.begin() as conn:
         row = conn.execute(text(sql), {"source_id": source_id}).mappings().first()
+    return int(row["c"]) if row else 0
+
+
+def count_research_documents_by_status(
+    engine: Engine,
+    *,
+    source_id: str,
+    status: str,
+) -> int:
+    sql = """
+        SELECT count(*) AS c
+        FROM research_documents
+        WHERE source_id = :source_id
+          AND status = :status
+    """
+    with engine.begin() as conn:
+        row = conn.execute(text(sql), {"source_id": source_id, "status": status}).mappings().first()
     return int(row["c"]) if row else 0
