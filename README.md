@@ -41,8 +41,15 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 - `POST /v2/intel/ingest_urls` queues URL ingestion jobs (fetch/extract/enrich).
 - `GET /v2/intel/articles/{article_id}` returns status + compact outputs.
 
+## Research Phase 1 ingestion
+- `POST /v2/research/sources/upsert`
+- `GET /v2/research/sources?topic_key=<topic>`
+- `POST /v2/research/ingest/run`
+- `GET /v2/research/ingest/runs/{run_id}`
+
 ## Worker
 - `docker compose run --rm api python -m app.intel.worker --once`
+- `docker compose run --rm api python -m app.research.worker --once`
 
 ## ChatGPT Actions
 - Setup guide: `docs/chatgpt_actions_setup.md`

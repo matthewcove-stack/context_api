@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 import uuid
 from typing import Any, Dict, List, Optional
@@ -10,6 +11,17 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import text
 
 from app.config import Settings, settings as default_settings
+from app.research.contracts import (
+    ResearchIngestRunRequest,
+    ResearchIngestRunResponse,
+    ResearchIngestRunStatusResponse,
+    ResearchRunCounters,
+    ResearchSourceListResponse,
+    ResearchSourceRecord,
+    ResearchSourceUpsertRequest,
+    ResearchSourceUpsertResponse,
+)
+from app.research.ids import compute_source_id
 from app.models import (
     ChunkSearchRequest,
     ChunkSearchResponse,
@@ -35,9 +47,12 @@ from app.models import (
 from app.storage.db import (
     check_db,
     canonicalize_url,
+    create_research_ingestion_run,
     compute_article_id,
     create_intel_ingest_job,
     create_db_engine,
+    get_research_ingestion_run,
+    get_research_ingestion_run_by_idempotency,
     get_project,
     get_task,
     get_intel_article,
@@ -46,8 +61,10 @@ from app.storage.db import (
     get_latest_job_error,
     search_intel_articles,
     search_intel_sections,
+    list_research_sources,
     search_projects,
     search_tasks,
+    upsert_research_source,
     upsert_intel_article_seed,
     upsert_projects,
     upsert_tasks,
@@ -208,6 +225,14 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
         except Exception:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable")
         return {"status": "ok"}
+
+    @app.get("/ready")
+    def ready() -> Dict[str, str]:
+        try:
+            check_db(app.state.engine)
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable")
+        return {"status": "ready"}
 
     @app.get("/version")
     def version(settings: Settings = Depends(get_settings)) -> Dict[str, Any]:
@@ -583,6 +608,136 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
             outline=outline,
             meta=meta,
             last_error=last_error,
+        )
+
+    @app.post("/v2/research/sources/upsert", response_model=ResearchSourceUpsertResponse)
+    def upsert_research_source_endpoint(
+        payload: ResearchSourceUpsertRequest,
+        _: None = Depends(require_bearer),
+    ) -> ResearchSourceUpsertResponse:
+        canonical_base = canonicalize_url(payload.base_url)
+        if not canonical_base:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid base_url")
+        source_id = compute_source_id(
+            topic_key=payload.topic_key,
+            kind=payload.kind,
+            base_url=canonical_base,
+        )
+        max_items_per_run = max(int(os.getenv("RESEARCH_MAX_ITEMS_PER_SOURCE", "50")), 1)
+        result = upsert_research_source(
+            app.state.engine,
+            source_id=source_id,
+            topic_key=payload.topic_key.strip().lower(),
+            kind=payload.kind,
+            name=payload.name.strip(),
+            base_url_original=payload.base_url.strip(),
+            base_url_canonical=canonical_base,
+            enabled=payload.enabled,
+            tags=[tag.strip().lower() for tag in payload.tags if tag.strip()],
+            poll_interval_minutes=payload.poll_interval_minutes,
+            rate_limit_per_hour=payload.rate_limit_per_hour,
+            robots_mode=payload.robots_mode,
+            max_items_per_run=max_items_per_run,
+        )
+        return ResearchSourceUpsertResponse(**result)
+
+    @app.get("/v2/research/sources", response_model=ResearchSourceListResponse)
+    def list_research_sources_endpoint(
+        topic_key: str,
+        enabled_only: bool = True,
+        _: None = Depends(require_bearer),
+    ) -> ResearchSourceListResponse:
+        rows = list_research_sources(
+            app.state.engine,
+            topic_key=topic_key.strip().lower(),
+            enabled_only=enabled_only,
+        )
+        items: List[ResearchSourceRecord] = []
+        for row in rows:
+            items.append(
+                ResearchSourceRecord(
+                    source_id=row["source_id"],
+                    topic_key=row["topic_key"],
+                    kind=row["kind"],
+                    name=row["name"],
+                    base_url_original=row["base_url_original"],
+                    base_url_canonical=row["base_url_canonical"],
+                    enabled=bool(row.get("enabled", True)),
+                    tags=row.get("tags") or [],
+                    poll_interval_minutes=int(row.get("poll_interval_minutes") or 60),
+                    rate_limit_per_hour=int(row.get("rate_limit_per_hour") or 30),
+                    robots_mode=row.get("robots_mode") or "strict",
+                    max_items_per_run=int(row.get("max_items_per_run") or 50),
+                )
+            )
+        return ResearchSourceListResponse(items=items)
+
+    @app.post("/v2/research/ingest/run", response_model=ResearchIngestRunResponse)
+    def queue_research_ingest_run_endpoint(
+        payload: ResearchIngestRunRequest,
+        _: None = Depends(require_bearer),
+    ) -> ResearchIngestRunResponse:
+        normalized_topic = payload.topic_key.strip().lower()
+        if payload.idempotency_key:
+            existing = get_research_ingestion_run_by_idempotency(
+                app.state.engine,
+                topic_key=normalized_topic,
+                idempotency_key=payload.idempotency_key,
+            )
+            if existing:
+                selected = existing.get("selected_source_ids") or []
+                return ResearchIngestRunResponse(
+                    run_id=str(existing.get("run_id")),
+                    status=existing.get("status") or "queued",
+                    sources_selected=len(selected) if isinstance(selected, list) else 0,
+                )
+
+        selected_sources = list_research_sources(
+            app.state.engine,
+            topic_key=normalized_topic,
+            source_ids=payload.source_ids or None,
+            enabled_only=True,
+        )
+        selected_source_ids = [str(row["source_id"]) for row in selected_sources]
+        if not selected_source_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No enabled sources selected for topic",
+            )
+        run = create_research_ingestion_run(
+            app.state.engine,
+            topic_key=normalized_topic,
+            trigger=payload.trigger,
+            requested_source_ids=payload.source_ids,
+            selected_source_ids=selected_source_ids,
+            idempotency_key=payload.idempotency_key,
+        )
+        return ResearchIngestRunResponse(
+            run_id=str(run.get("run_id")),
+            status=run.get("status") or "queued",
+            sources_selected=len(selected_source_ids),
+        )
+
+    @app.get("/v2/research/ingest/runs/{run_id}", response_model=ResearchIngestRunStatusResponse)
+    def get_research_ingest_run_endpoint(
+        run_id: str,
+        _: None = Depends(require_bearer),
+    ) -> ResearchIngestRunStatusResponse:
+        run = get_research_ingestion_run(app.state.engine, run_id=run_id)
+        if not run:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+        return ResearchIngestRunStatusResponse(
+            run_id=str(run["run_id"]),
+            status=run.get("status") or "queued",
+            started_at=run.get("started_at"),
+            finished_at=run.get("finished_at"),
+            counters=ResearchRunCounters(
+                items_seen=int(run.get("items_seen") or 0),
+                items_new=int(run.get("items_new") or 0),
+                items_deduped=int(run.get("items_deduped") or 0),
+                items_failed=int(run.get("items_failed") or 0),
+            ),
+            errors=[str(item) for item in (run.get("errors") or [])],
         )
 
     return app

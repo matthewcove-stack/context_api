@@ -9,7 +9,17 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from sqlalchemy import Engine, create_engine, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.storage.schema import intel_article_sections, intel_articles, intel_ingest_jobs, projects, tasks
+from app.storage.schema import (
+    intel_article_sections,
+    intel_articles,
+    intel_ingest_jobs,
+    projects,
+    research_documents,
+    research_ingestion_runs,
+    research_source_policies,
+    research_sources,
+    tasks,
+)
 
 
 def create_db_engine(database_url: str) -> Engine:
@@ -602,3 +612,425 @@ def get_latest_job_error(engine: Engine, article_id: str) -> Optional[str]:
     with engine.begin() as conn:
         row = conn.execute(text(sql), {"article_id": article_id}).mappings().first()
     return str(row["last_error"]) if row and row.get("last_error") else None
+
+
+def upsert_research_source(
+    engine: Engine,
+    *,
+    source_id: str,
+    topic_key: str,
+    kind: str,
+    name: str,
+    base_url_original: str,
+    base_url_canonical: str,
+    enabled: bool,
+    tags: List[str],
+    poll_interval_minutes: int,
+    rate_limit_per_hour: int,
+    robots_mode: str,
+    max_items_per_run: int,
+) -> Dict[str, Any]:
+    with engine.begin() as conn:
+        existing = conn.execute(
+            select(research_sources.c.source_id).where(research_sources.c.source_id == source_id)
+        ).mappings().first()
+        source_stmt = pg_insert(research_sources).values(
+            {
+                "source_id": source_id,
+                "topic_key": topic_key,
+                "kind": kind,
+                "name": name,
+                "base_url_original": base_url_original,
+                "base_url_canonical": base_url_canonical,
+                "enabled": enabled,
+                "tags": tags,
+            }
+        )
+        source_stmt = source_stmt.on_conflict_do_update(
+            index_elements=[research_sources.c.source_id],
+            set_={
+                "topic_key": source_stmt.excluded.topic_key,
+                "kind": source_stmt.excluded.kind,
+                "name": source_stmt.excluded.name,
+                "base_url_original": source_stmt.excluded.base_url_original,
+                "base_url_canonical": source_stmt.excluded.base_url_canonical,
+                "enabled": source_stmt.excluded.enabled,
+                "tags": source_stmt.excluded.tags,
+                "updated_at": text("now()"),
+            },
+        )
+        conn.execute(source_stmt)
+
+        policy_stmt = pg_insert(research_source_policies).values(
+            {
+                "source_id": source_id,
+                "poll_interval_minutes": poll_interval_minutes,
+                "rate_limit_per_hour": rate_limit_per_hour,
+                "robots_mode": robots_mode,
+                "max_items_per_run": max_items_per_run,
+            }
+        )
+        policy_stmt = policy_stmt.on_conflict_do_update(
+            index_elements=[research_source_policies.c.source_id],
+            set_={
+                "poll_interval_minutes": policy_stmt.excluded.poll_interval_minutes,
+                "rate_limit_per_hour": policy_stmt.excluded.rate_limit_per_hour,
+                "robots_mode": policy_stmt.excluded.robots_mode,
+                "max_items_per_run": policy_stmt.excluded.max_items_per_run,
+                "updated_at": text("now()"),
+            },
+        )
+        conn.execute(policy_stmt)
+
+    return {"source_id": source_id, "status": "created" if existing is None else "updated"}
+
+
+def list_research_sources(
+    engine: Engine,
+    *,
+    topic_key: str,
+    source_ids: Optional[List[str]] = None,
+    enabled_only: bool = True,
+) -> List[Dict[str, Any]]:
+    stmt = (
+        select(
+            research_sources,
+            research_source_policies.c.poll_interval_minutes,
+            research_source_policies.c.rate_limit_per_hour,
+            research_source_policies.c.robots_mode,
+            research_source_policies.c.max_items_per_run,
+            research_source_policies.c.last_polled_at,
+        )
+        .join(
+            research_source_policies,
+            research_source_policies.c.source_id == research_sources.c.source_id,
+        )
+        .where(research_sources.c.topic_key == topic_key)
+    )
+    if enabled_only:
+        stmt = stmt.where(research_sources.c.enabled.is_(True))
+    if source_ids:
+        stmt = stmt.where(research_sources.c.source_id.in_(source_ids))
+    stmt = stmt.order_by(research_sources.c.created_at.asc())
+    with engine.begin() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def set_research_source_polled(
+    engine: Engine,
+    *,
+    source_id: str,
+) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            research_source_policies.update()
+            .where(research_source_policies.c.source_id == source_id)
+            .values(last_polled_at=text("now()"), updated_at=text("now()"))
+        )
+
+
+def get_research_ingestion_run_by_idempotency(
+    engine: Engine,
+    *,
+    topic_key: str,
+    idempotency_key: str,
+) -> Optional[Dict[str, Any]]:
+    stmt = (
+        select(research_ingestion_runs)
+        .where(research_ingestion_runs.c.topic_key == topic_key)
+        .where(research_ingestion_runs.c.idempotency_key == idempotency_key)
+        .order_by(research_ingestion_runs.c.created_at.desc())
+        .limit(1)
+    )
+    with engine.begin() as conn:
+        row = conn.execute(stmt).mappings().first()
+    return dict(row) if row else None
+
+
+def create_research_ingestion_run(
+    engine: Engine,
+    *,
+    topic_key: str,
+    trigger: str,
+    requested_source_ids: List[str],
+    selected_source_ids: List[str],
+    idempotency_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    run_id = uuid.uuid4()
+    with engine.begin() as conn:
+        row = conn.execute(
+            research_ingestion_runs.insert()
+            .values(
+                {
+                    "run_id": run_id,
+                    "topic_key": topic_key,
+                    "trigger": trigger,
+                    "status": "queued",
+                    "idempotency_key": idempotency_key,
+                    "requested_source_ids": requested_source_ids,
+                    "selected_source_ids": selected_source_ids,
+                }
+            )
+            .returning(research_ingestion_runs)
+        ).mappings().first()
+    return dict(row) if row else {"run_id": str(run_id), "status": "queued"}
+
+
+def get_research_ingestion_run(
+    engine: Engine,
+    *,
+    run_id: str,
+) -> Optional[Dict[str, Any]]:
+    stmt = select(research_ingestion_runs).where(research_ingestion_runs.c.run_id == run_id)
+    with engine.begin() as conn:
+        row = conn.execute(stmt).mappings().first()
+    return dict(row) if row else None
+
+
+def has_open_research_run_for_topic(
+    engine: Engine,
+    *,
+    topic_key: str,
+    trigger: str,
+) -> bool:
+    sql = """
+        SELECT 1
+        FROM research_ingestion_runs
+        WHERE topic_key = :topic_key
+          AND trigger = :trigger
+          AND status IN ('queued', 'running')
+        LIMIT 1
+    """
+    with engine.begin() as conn:
+        row = conn.execute(text(sql), {"topic_key": topic_key, "trigger": trigger}).first()
+    return row is not None
+
+
+def claim_next_research_ingestion_run(engine: Engine) -> Optional[Dict[str, Any]]:
+    sql_select = """
+        SELECT *
+        FROM research_ingestion_runs
+        WHERE status = 'queued'
+        ORDER BY created_at ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+    """
+    with engine.begin() as conn:
+        row = conn.execute(text(sql_select)).mappings().first()
+        if not row:
+            return None
+        conn.execute(
+            text(
+                """
+                UPDATE research_ingestion_runs
+                SET status = 'running',
+                    started_at = COALESCE(started_at, now()),
+                    updated_at = now()
+                WHERE run_id = :run_id
+                """
+            ),
+            {"run_id": row["run_id"]},
+        )
+        updated = dict(row)
+        updated["status"] = "running"
+        return updated
+
+
+def update_research_run_counters(
+    engine: Engine,
+    *,
+    run_id: Any,
+    items_seen: int = 0,
+    items_new: int = 0,
+    items_deduped: int = 0,
+    items_failed: int = 0,
+) -> None:
+    sql = """
+        UPDATE research_ingestion_runs
+        SET items_seen = items_seen + :items_seen,
+            items_new = items_new + :items_new,
+            items_deduped = items_deduped + :items_deduped,
+            items_failed = items_failed + :items_failed,
+            updated_at = now()
+        WHERE run_id = :run_id
+    """
+    with engine.begin() as conn:
+        conn.execute(
+            text(sql),
+            {
+                "run_id": run_id,
+                "items_seen": max(items_seen, 0),
+                "items_new": max(items_new, 0),
+                "items_deduped": max(items_deduped, 0),
+                "items_failed": max(items_failed, 0),
+            },
+        )
+
+
+def append_research_run_error(
+    engine: Engine,
+    *,
+    run_id: Any,
+    message: str,
+    max_errors: int = 20,
+) -> None:
+    run = get_research_ingestion_run(engine, run_id=str(run_id))
+    if not run:
+        return
+    errors = run.get("errors") or []
+    if not isinstance(errors, list):
+        errors = []
+    errors.append(message[:500])
+    if len(errors) > max_errors:
+        errors = errors[-max_errors:]
+    with engine.begin() as conn:
+        conn.execute(
+            research_ingestion_runs.update()
+            .where(research_ingestion_runs.c.run_id == run_id)
+            .values(errors=errors, updated_at=text("now()"))
+        )
+
+
+def mark_research_ingestion_run_finished(
+    engine: Engine,
+    *,
+    run_id: Any,
+    status: str,
+) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            research_ingestion_runs.update()
+            .where(research_ingestion_runs.c.run_id == run_id)
+            .values(status=status, finished_at=text("now()"), updated_at=text("now()"))
+        )
+
+
+def upsert_research_document_seed(
+    engine: Engine,
+    *,
+    document_id: str,
+    source_id: str,
+    run_id: Any,
+    canonical_url: str,
+    url_original: Optional[str],
+    external_id: Optional[str] = None,
+) -> str:
+    with engine.begin() as conn:
+        existing = conn.execute(
+            select(research_documents.c.document_id, research_documents.c.status).where(
+                research_documents.c.document_id == document_id
+            )
+        ).mappings().first()
+        if not existing:
+            conn.execute(
+                research_documents.insert().values(
+                    {
+                        "document_id": document_id,
+                        "source_id": source_id,
+                        "run_id": run_id,
+                        "canonical_url": canonical_url,
+                        "url_original": url_original,
+                        "external_id": external_id,
+                        "status": "discovered",
+                    }
+                )
+            )
+            return "new"
+        status = str(existing.get("status") or "discovered")
+        if status in {"failed", "discovered"}:
+            conn.execute(
+                research_documents.update()
+                .where(research_documents.c.document_id == document_id)
+                .values(status="discovered", run_id=run_id, updated_at=text("now()"))
+            )
+            return "retry"
+        return "deduped"
+
+
+def mark_research_document_fetched(
+    engine: Engine,
+    *,
+    document_id: str,
+    title: Optional[str],
+    raw_payload: str,
+    content_hash: str,
+    fetch_meta: Dict[str, Any],
+) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            research_documents.update()
+            .where(research_documents.c.document_id == document_id)
+            .values(
+                title=title,
+                raw_payload=raw_payload,
+                content_hash=content_hash,
+                fetch_meta=fetch_meta,
+                status="fetched",
+                fetched_at=text("now()"),
+                updated_at=text("now()"),
+            )
+        )
+
+
+def mark_research_document_failed(
+    engine: Engine,
+    *,
+    document_id: str,
+    fetch_meta: Optional[Dict[str, Any]] = None,
+) -> None:
+    values: Dict[str, Any] = {"status": "failed", "updated_at": text("now()")}
+    if fetch_meta is not None:
+        values["fetch_meta"] = fetch_meta
+    with engine.begin() as conn:
+        conn.execute(
+            research_documents.update()
+            .where(research_documents.c.document_id == document_id)
+            .values(**values)
+        )
+
+
+def list_due_research_sources(engine: Engine) -> List[Dict[str, Any]]:
+    sql = """
+        SELECT
+            s.source_id,
+            s.topic_key,
+            s.kind,
+            s.name,
+            s.base_url_original,
+            s.base_url_canonical,
+            s.enabled,
+            s.tags,
+            p.poll_interval_minutes,
+            p.rate_limit_per_hour,
+            p.robots_mode,
+            p.max_items_per_run,
+            p.last_polled_at
+        FROM research_sources s
+        JOIN research_source_policies p
+          ON p.source_id = s.source_id
+        WHERE s.enabled = true
+          AND (
+            p.last_polled_at IS NULL
+            OR now() - p.last_polled_at >= (p.poll_interval_minutes * interval '1 minute')
+          )
+        ORDER BY s.topic_key ASC, s.created_at ASC
+    """
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql)).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def count_research_documents(
+    engine: Engine,
+    *,
+    source_id: str,
+) -> int:
+    sql = """
+        SELECT count(*) AS c
+        FROM research_documents
+        WHERE source_id = :source_id
+    """
+    with engine.begin() as conn:
+        row = conn.execute(text(sql), {"source_id": source_id}).mappings().first()
+    return int(row["c"]) if row else 0

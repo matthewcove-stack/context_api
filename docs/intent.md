@@ -1,46 +1,36 @@
 # context_api — Intent
 
 ## Product intent
-This service is BrainOS's Context API: a small, authenticated, docker-reproducible API that serves
-compact context hints for LLM workflows.
+`context_api` is BrainOS's retrieval substrate: a small authenticated service that ingests trusted external knowledge, preserves provenance, and serves bounded context payloads for agents.
 
-We are prioritising an MVP extension:
+The next initiative extends the current intel MVP into a durable research ingestion pipeline:
 
-### Intel Digest + Context Pack (Option B)
-Ship an "Intel connector" that stores engineering-intel artifacts (articles/papers/transcripts) and
-serves compact Context Packs for reasoning. For MVP, packs are intel-only (do not merge Projects/Tasks).
+1) Curated source catalogue
+- Maintain allowlisted research sources by topic/domain.
+- Enforce per-source crawl policies and operator controls.
 
-## Primary workflows (MVP)
+2) Continuous ingestion
+- Discover and fetch newly published items on a schedule/event trigger.
+- Preserve deterministic identities and idempotent re-runs.
 
-1) Ingest (fixtures first; URLs later)
-- Store raw snapshot losslessly
-- Store derived representations:
-  - outline (section headings)
-  - section texts (for targeted expansion)
-  - summary (short)
-  - signals (structured claims with provenance)
-  - outbound links
+3) Relevance and enrichment
+- Score candidate items with explainable signals.
+- Extract, chunk, embed, and index for retrieval.
 
-2) Retrieve Context Pack
-- Caller provides query + optional tags + optional recency bias + token budget
-- API returns:
-  - signals + short summary + citations/pointers
-  - retrieval_confidence (high/med/low)
-  - next_action (proceed | refine_query | expand_sections)
-
-3) Progressive disclosure
-- Caller can fetch outline and then specific sections/chunks
-- Default behaviour never returns full raw text in /context/pack
+4) Retrieval for agents
+- Keep compact, citation-first `/v2` responses.
+- Preserve progressive disclosure for deeper expansion.
 
 ## Constraints
-- Do not change /v1 endpoints or their contracts in this MVP.
-- Deterministic fixture ingestion (same inputs -> same stored outputs).
-- Bounded outputs on all endpoints.
-- Provenance for every extracted signal via cite pointers.
-- Docker-compose reproducibility for run and tests.
+- `docs/current_state.md` is authoritative for what is currently implemented.
+- Do not break or reshape existing `/v1` contracts.
+- Extend existing compose/network/env patterns; do not introduce parallel infrastructure stacks.
+- Keep outputs bounded and provenance-rich.
+- Treat idempotency and deterministic IDs as first-order requirements.
+- Never embed secrets in code/docs; use env vars only.
 
-## MVP success criteria
-- `POST /v2/intel/ingest` can ingest a deterministic fixture bundle.
-- `POST /v2/context/pack` returns a bounded pack with citations from the fixture corpus.
-- Expansion endpoints return stable, bounded outputs for outline + selected sections/chunks.
-- Tests cover ingest + pack + expansion.
+## Success criteria (program-level)
+- Research source ingestion runs continuously and safely with replay support.
+- Duplicate fetches for the same canonical item do not create duplicate records.
+- Retrieval remains bounded and cites stable provenance pointers.
+- Operators can answer: what changed, why it was ingested, and where each claim came from.

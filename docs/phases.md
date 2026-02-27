@@ -1,93 +1,180 @@
 # context_api — Phases
 
-## Phase 0 (done)
-- Basic mirrored data model for projects/tasks
-- Search endpoints and dockerised tests
-- Optional sync script scaffolding
+Truth: `docs/current_state.md` is authoritative for implemented behavior.
 
-## Phase 1 (supporting BrainOS)
-- Ensure search endpoints cover the fields needed by intent_normaliser for task/project resolution.
-- Ensure sync script can run deterministically and safely (no partial writes).
+## Legacy phases (already shipped)
+- Phase 0: `/v1` projects/tasks sync + search.
+- Phase 2: intel fixtures + `/v2/context/pack` + expansion endpoints.
+- Phase 3: URL ingestion worker (fetch/extract/sectionise/enrich) backed by Postgres jobs.
+- Phase 4: ChatGPT Actions read-only adapter docs/assets.
 
-## Phase 2 (MVP priority) — Intel connector + Context Packs (Option B) (done)
-Goal: ship intel-only Context Pack retrieval and progressive disclosure under /v2 without altering /v1.
+## Research ingestion program phases
 
-Deliverables:
-- Alembic migration(s) adding intel tables:
-  - intel_articles
-  - intel_article_sections
-- Deterministic fixture ingestion:
-  - checked-in fixtures under tests/fixtures/intel/
-  - util ingestion helper + `POST /v2/intel/ingest`
-- Retrieval:
-  - `POST /v2/context/pack` returns bounded pack with citations, confidence, next_action, and trace
-- Expansion:
-  - outline + sections + chunks:search endpoints
-- Tests:
-  - ingest fixture -> /context/pack -> expansion endpoints assertions
+### Phase 0 — Contracts, guardrails, and wiring (docs + stubs)
+Scope:
+- Define the research ingestion architecture and contracts without changing runtime behavior.
+- Add deterministic ID helpers and typed scaffolding for Phase 1.
 
-Exit criteria:
-- `docker compose run --rm api pytest` passes
-- /v1 behaviour unchanged
+Edit map:
+- `docs/intent.md`
+- `docs/current_state.md`
+- `docs/phases.md`
+- `docs/codex_rules.md`
+- `docs/PHASE_EXECUTION_PROMPT.md`
+- `docs/contracts/v2_research_*.md`
+- `app/research/*` (stubs only)
+- `tests/test_research_*.py` (unit-only)
 
-## Phase 3 (MVP priority) — URL ingestion + fetch/extract + LLM enrichment
-Goal: accept a list of URLs, fetch and extract readable text, sectionise, run LLM enrichment
-(outline + summary + signals with cite pointers), store results, and make them available via existing /v2 retrieval.
+Data migrations:
+- None.
 
-Deliverables:
-- Alembic migration(s):
-  - add intel_ingest_jobs table (Postgres-backed queue)
-  - extend intel_articles for URL ingestion:
-    - url_original, raw_html, extracted_text
-    - fetch metadata (http_status, content_type, etag, last_modified)
-    - extraction_meta (jsonb), enrichment_meta (jsonb)
-    - status fields (queued/extracted/enriched/failed)
-- New /v2 endpoints (must not touch /v1):
-  - `POST /v2/intel/ingest_urls` (queues jobs, returns job_id/article_id per URL)
-  - `GET /v2/intel/articles/{article_id}` (status + metadata; include summary/signals when ready)
-  - (optional) `GET /v2/intel/ingest_jobs/{job_id}` (poll)
-- Worker entrypoint (same repo):
-  - `python -m app.intel.worker` (or equivalent)
-  - polls jobs table; performs:
-    1) URL canonicalisation + dedupe
-    2) fetch (bounded, throttled)
-    3) extract (trafilatura/readability fallback)
-    4) sectionise (headings or paragraph buckets)
-    5) LLM enrichment (strict JSON schema; no claims without cite pointer)
-    6) store + update job status
-- LLM integration:
-  - provider via env vars (e.g. OPENAI_API_KEY, OPENAI_MODEL)
-  - prompt versioning and schema validation (Pydantic)
-  - bounded output enforcement (limits on counts/lengths)
-- Tests:
-  - unit tests: URL canonicalisation, bounds, schema validation
-  - integration test: local HTTP fixture server (no live internet), mocked LLM client, end-to-end ingest -> pack retrieval
-- Make targets (or equivalent documented commands):
-  - `docker compose run --rm api pytest`
-  - `docker compose run --rm api python -m app.intel.worker --once` (or documented worker run)
-  - `docker compose up --build` (API)
+Local run:
+- `docker compose up --build`
 
-Exit criteria:
-- Fixture URL ingestion works end-to-end (via local test server)
-- LLM enrichment output is stored and used by /v2/context/pack
-- /v1 behaviour unchanged
+Verification:
+- `docker compose run --rm api pytest`
+- `bash scripts/edge_validate.sh`
 
+Rollback:
+- Revert docs/stub files only. No DB/API runtime rollback needed.
 
-## Phase 4 — ChatGPT Actions integration (deployment + OpenAPI assets)
-Goal: make the knowledge base usable from ChatGPT UI (Plus plan) via a Custom GPT with Actions.
+Definition of done:
+- Authoritative docs describe the next phases and guardrails.
+- Stub contracts and deterministic ID helpers exist and are tested.
 
-Deliverables:
-- OpenAPI schema limited to read-only endpoints:
-  - adapters/chatgpt_actions/openapi.yaml
-- Custom GPT instructions:
-  - adapters/chatgpt_actions/gpt_instructions.md
-- Setup docs:
-  - docs/chatgpt_actions_setup.md
-  - docs/deployment/cloudflare_tunnel.md
-- docker-compose override for cloudflared:
-  - docker-compose.cloudflare-tunnel.yml
+### Phase 1 — Source catalogue + scheduler + dedupe + raw storage (implemented)
+Scope:
+- Introduce curated source registry, crawl policy, ingestion runs, and discovered items.
+- Fetch newly discovered items with deterministic dedupe and raw payload persistence.
 
-Exit criteria:
-- Public URL reachable over HTTPS.
-- Custom GPT can successfully call /v2/context/pack and expansion endpoints using bearer auth.
+Edit map (planned):
+- `alembic/versions/0004_*_research_catalog.py`
+- `app/storage/schema.py`, `app/storage/db.py`
+- `app/research/catalog.py`, `app/research/discovery.py`, `app/research/worker.py`
+- `app/main.py` (`/v2/research/sources*`, `/v2/research/ingest*`)
+- `tests/test_research_catalog*.py`, `tests/test_research_ingest*.py`
+
+Data migrations (planned):
+- `research_sources`
+- `research_source_policies`
+- `research_ingestion_runs`
+- `research_documents` (seed/raw metadata only)
+
+Local run:
+- `docker compose up --build`
+- `docker compose run --rm api python -m app.research.worker --once`
+
+Verification:
+- `docker compose run --rm api pytest`
+- `docker compose run --rm api python -m app.research.worker --once`
+- `bash scripts/edge_validate.sh`
+
+Rollback:
+- Feature-flag new endpoints off.
+- Stop worker, downgrade migration to pre-phase revision if needed.
+
+Definition of done:
+- Source allowlist CRUD works.
+- New item discovery is idempotent per canonical URL/external id.
+- Raw fetch payload and run audit records are persisted.
+
+### Phase 2 — Extraction and normalization
+Scope:
+- Convert raw content into normalized extracted text and structured metadata.
+
+Edit map (planned):
+- `app/research/extract.py`
+- `app/storage/db.py`, `app/storage/schema.py`
+- `app/research/worker.py`
+- extraction-focused tests
+
+Data migrations (planned):
+- Add extraction fields/state transitions to `research_documents`.
+
+Local run:
+- Same as Phase 1.
+
+Verification:
+- Deterministic extraction tests with local fixtures only.
+
+Rollback:
+- Keep raw payloads; reset document state to `fetched` and re-run.
+
+Definition of done:
+- Extracted text is persisted with provenance (`extraction_method`, timestamps, warnings).
+
+### Phase 3 — Chunking + embedding + vector storage
+Scope:
+- Add deterministic chunk generation and embeddings for retrievable units.
+
+Edit map (planned):
+- `alembic/versions/0005_*_research_chunks_embeddings.py`
+- `app/research/chunking.py`, `app/research/embeddings.py`
+- `app/storage/schema.py`, `app/storage/db.py`
+- `app/research/worker.py`
+- retrieval preparation tests
+
+Data migrations (planned):
+- `research_chunks`
+- `research_embeddings` (vector and model metadata)
+
+Local run:
+- Existing compose stack; no new infra component unless required by approved migration plan.
+
+Verification:
+- Chunk ID determinism tests.
+- Embedding write/read tests.
+
+Rollback:
+- Disable embed stage and keep extraction outputs.
+- Recompute embeddings from chunk table when re-enabled.
+
+Definition of done:
+- Chunk IDs are stable across re-runs.
+- Embeddings stored with `embedding_model_id` and provenance.
+
+### Phase 4 — Context API retrieval endpoints + query logging
+Scope:
+- Expose `/v2/research/*` retrieval endpoints and query audit logs.
+- Keep `/v2/context/pack` compatibility while enabling research-backed retrieval.
+
+Edit map (planned):
+- `app/main.py`
+- `app/models.py`
+- `app/storage/db.py`
+- `docs/contracts/v2_research_retrieval.md`
+- `adapters/chatgpt_actions/openapi.yaml` (read-only additions if approved)
+
+Data migrations (planned):
+- `research_query_logs`
+- optional `research_retrieval_feedback`
+
+Verification:
+- End-to-end retrieval tests with deterministic fixtures and mocked embeddings.
+
+Rollback:
+- Route retrieval back to intel-only selectors.
+
+Definition of done:
+- Retrieval returns bounded results with stable provenance pointers and trace IDs.
+
+### Phase 5 — Relevance scoring + feedback loop + observability
+Scope:
+- Baseline explainable scoring and operator feedback capture.
+- Improve operational metrics for ingestion and retrieval quality.
+
+Planned scoring baseline:
+- lexical match + embedding similarity + recency decay + source weight + policy gates.
+
+Definition of done:
+- Score breakdown is stored and inspectable per document/query.
+- Dashboards/queries can show ingestion failures, lag, and top sources.
+
+### Phase 6 — Production hardening
+Scope:
+- Rate controls, retry/backoff policy, backpressure, disaster recovery drills.
+
+Definition of done:
+- SLO/error-budget policy documented and exercised.
+- Recovery runbooks validated in staging-like environment.
 

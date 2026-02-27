@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, MetaData, Table, Text, text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, MetaData, Table, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func
 
@@ -99,4 +99,84 @@ intel_ingest_jobs = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Index("ix_intel_ingest_jobs_status_created_at", "status", "created_at"),
     Index("ix_intel_ingest_jobs_article_id", "article_id"),
+)
+
+research_sources = Table(
+    "research_sources",
+    metadata,
+    Column("source_id", Text, primary_key=True),
+    Column("topic_key", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("name", Text, nullable=False),
+    Column("base_url_original", Text, nullable=False),
+    Column("base_url_canonical", Text, nullable=False),
+    Column("enabled", Boolean, nullable=False, server_default=text("true")),
+    Column("tags", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Index("ix_research_sources_topic_key", "topic_key"),
+    Index("ix_research_sources_enabled", "enabled"),
+    Index("uq_research_sources_topic_kind_canonical", "topic_key", "kind", "base_url_canonical", unique=True),
+)
+
+research_source_policies = Table(
+    "research_source_policies",
+    metadata,
+    Column("source_id", Text, ForeignKey("research_sources.source_id", ondelete="CASCADE"), primary_key=True),
+    Column("poll_interval_minutes", Integer, nullable=False, server_default=text("60")),
+    Column("rate_limit_per_hour", Integer, nullable=False, server_default=text("30")),
+    Column("robots_mode", Text, nullable=False, server_default=text("'strict'")),
+    Column("max_items_per_run", Integer, nullable=False, server_default=text("50")),
+    Column("last_polled_at", DateTime(timezone=True), nullable=True),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+research_ingestion_runs = Table(
+    "research_ingestion_runs",
+    metadata,
+    Column("run_id", UUID(as_uuid=True), primary_key=True),
+    Column("topic_key", Text, nullable=False),
+    Column("trigger", Text, nullable=False),
+    Column("status", Text, nullable=False, server_default=text("'queued'")),
+    Column("idempotency_key", Text, nullable=True),
+    Column("requested_source_ids", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("selected_source_ids", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("items_seen", Integer, nullable=False, server_default=text("0")),
+    Column("items_new", Integer, nullable=False, server_default=text("0")),
+    Column("items_deduped", Integer, nullable=False, server_default=text("0")),
+    Column("items_failed", Integer, nullable=False, server_default=text("0")),
+    Column("errors", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("started_at", DateTime(timezone=True), nullable=True),
+    Column("finished_at", DateTime(timezone=True), nullable=True),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Index("ix_research_runs_status_created_at", "status", "created_at"),
+    Index("ix_research_runs_topic_key", "topic_key"),
+    Index("ix_research_runs_idempotency_key", "idempotency_key"),
+)
+
+research_documents = Table(
+    "research_documents",
+    metadata,
+    Column("document_id", Text, primary_key=True),
+    Column("source_id", Text, ForeignKey("research_sources.source_id", ondelete="CASCADE"), nullable=False),
+    Column("run_id", UUID(as_uuid=True), ForeignKey("research_ingestion_runs.run_id", ondelete="SET NULL"), nullable=True),
+    Column("canonical_url", Text, nullable=False),
+    Column("url_original", Text, nullable=True),
+    Column("external_id", Text, nullable=True),
+    Column("title", Text, nullable=True),
+    Column("published_at", DateTime(timezone=True), nullable=True),
+    Column("status", Text, nullable=False, server_default=text("'discovered'")),
+    Column("raw_payload", Text, nullable=True),
+    Column("content_hash", Text, nullable=True),
+    Column("fetch_meta", JSONB, nullable=True),
+    Column("extraction_meta", JSONB, nullable=True),
+    Column("enrichment_meta", JSONB, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("discovered_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("fetched_at", DateTime(timezone=True), nullable=True),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Index("ix_research_documents_source_id", "source_id"),
+    Index("ix_research_documents_status", "status"),
+    Index("ix_research_documents_canonical_url", "canonical_url"),
 )

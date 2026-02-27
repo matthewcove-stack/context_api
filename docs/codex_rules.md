@@ -1,38 +1,37 @@
 # Codex Rules — context_api
 
 ## Core rules
-- Do not change /v1 endpoints or contracts. All new work is under /v2.
-- Keep response payloads compact; this API serves context hints, not full documents.
-- Prefer deterministic behaviour: tests must not depend on live internet.
-- Add migrations via Alembic; do not hand-edit DB state.
-- Bounded outputs:
-  - /v2/context/pack respects token/size budgets.
-  - expansion endpoints return limited payloads by section/chunk selection.
-  - ingestion endpoints return small status payloads (no full documents).
+- Do not break `/v1` contracts.
+- Keep runtime changes scoped to the requested phase only.
+- `docs/current_state.md` is authoritative; update it whenever behavior changes.
+- Add DB changes via Alembic migrations only.
 
-## Intel ingestion rules
-- URL canonicalisation must be deterministic (strip common tracking params, normalise host/scheme).
-- Store lossless raw_html for traceability, but never return it by default.
-- Extraction must be bounded (max bytes, timeouts, max chars stored per field as a guardrail).
-- LLM enrichment must be schema-validated; reject/mark partial on invalid outputs.
-- No claim/signal without a cite pointer to an existing section_id.
+## Research ingestion guardrails
+- Deterministic IDs are mandatory for sources, documents, chunks, and retrieval citations.
+- Idempotency is mandatory for ingestion and reprocessing; duplicate canonical items must not duplicate records.
+- Preserve provenance on every derived artifact:
+  - source_id
+  - canonical_url
+  - fetch/extraction metadata
+  - chunk/embedding model versions
+- Do not discard raw payloads needed for audit/reprocessing unless retention policy explicitly says so.
 
-## Provenance
-- Every extracted signal must include a cite pointer (article_id + section_id).
-- For each cite pointer, store a bounded supporting_snippet that appears in the referenced section.
+## Governance and safety
+- Use allowlisted sources only.
+- Respect per-source crawl policy (rate, robots, fetch bounds, retries/backoff).
+- Never place secrets in code, logs, fixtures, docs, or tests.
+- Redaction must be applied before logging request/response payloads containing tokens or credentials.
 
-## Observability
-- /v2/context/pack returns trace_id and list of retrieved_article_ids.
-- Ingestion jobs record errors and attempts; worker logs are safe (no secrets).
+## Retrieval constraints
+- Keep retrieval outputs compact and bounded by explicit limits.
+- Prefer citation-first responses over long text dumps.
+- If hybrid retrieval is introduced, keep lexical fallback deterministic and documented.
 
-## Testing
-- Integration tests must:
-  - use a local HTTP fixture server for URL fetch
-  - mock the LLM client
-  - ingest -> enrich -> /v2/context/pack -> expansion endpoint assertions
+## Testing expectations
+- Unit tests must cover ID determinism and dedupe logic.
+- Integration tests must avoid live internet dependencies.
+- LLM-dependent stages must be mockable and schema-validated.
 
-
-## Actions / external access
-- Keep the Actions OpenAPI schema read-only by default (no ingest endpoints).
-- Prefer Cloudflare Tunnel for HTTPS exposure.
-- Never log CONTEXT_API_TOKEN or tunnel token.
+## Actions and external access
+- Actions/OpenAPI exposure is read-only by default.
+- Edge/Cloudflare exposure must follow existing repo runbooks and shared `edge` network standards.

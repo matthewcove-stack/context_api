@@ -1,23 +1,50 @@
-# Phase execution prompt (copy/paste into Codex)
+# Phase Execution Prompt — Research Phase 1
 
-You are implementing ONLY the requested phase from docs/phases.md.
-Obey docs/codex_rules.md and the truth hierarchy: docs/current_state.md is authoritative.
+You are implementing ONLY Phase 1 from `docs/phases.md`:
 
-## Your task
-Implement: Phase 3 — URL ingestion + fetch/extract + LLM enrichment (Option B)
+`Phase 1 — Source catalogue + scheduler + dedupe + raw storage`
 
-Do not start other phases.
+Truth hierarchy:
+1. `docs/current_state.md`
+2. `docs/intent.md`
+3. `docs/phases.md`
+4. `README.md`
+5. code
 
-## Repo constraints
-- Ensure verification commands exist and pass for this phase:
-  - docker compose run --rm api pytest
-  - docker compose up --build (API)
-  - docker compose run --rm api python -m app.intel.worker --once (worker)
-- Add tests appropriate to the phase.
-- Keep outputs deterministic for tests (no live internet, mock LLM).
-- Update docs/current_state.md and README to reflect what is now true.
+## Scope (must do)
+- Add source catalogue and source policy persistence.
+- Add ingestion run tracking and deterministic dedupe at item level.
+- Add raw fetch storage metadata for newly discovered items.
+- Add minimal `/v2/research/*` ingestion endpoints required by Phase 1 contracts.
+- Add worker logic for discovery + fetch + persistence with safe retries.
 
-## Output required
-1) List files changed/added.
-2) Commands run + results.
-3) Short notes on any assumptions (only if necessary).
+## Scope (must NOT do)
+- Do not implement chunk embeddings/vector retrieval yet.
+- Do not change `/v1` endpoints/contracts.
+- Do not bypass existing compose/edge/env patterns.
+- Do not introduce new infra stacks (Redis/Kafka/etc.) unless explicitly required by approved phase scope.
+
+## Implementation constraints
+- Use deterministic IDs and idempotency keys.
+- Keep jobs rerunnable and safe on crash/restart.
+- Enforce per-source rate limits and bounded fetch.
+- Persist provenance metadata for every fetched item.
+- Keep tests deterministic (local fixtures; mocked external calls where required).
+
+## Mandatory verification
+- `docker compose run --rm api pytest`
+- `docker compose run --rm api python -m app.research.worker --once`
+- `docker compose up --build`
+- `bash scripts/edge_validate.sh`
+
+## Documentation updates required
+- `docs/current_state.md`
+- `docs/contracts/v2_research_sources_and_ingest.md`
+- `README.md` (only if setup/run steps changed)
+
+## Output format required
+1. Files changed.
+2. Migrations added and why.
+3. Commands run with pass/fail summary.
+4. Rollback notes.
+5. Assumptions (only if unavoidable).

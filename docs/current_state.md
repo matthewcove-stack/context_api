@@ -1,83 +1,101 @@
 # context_api — Current State (Authoritative for this repo)
 
 ## What works today
-- FastAPI + Postgres + Alembic
-- Authenticated v1 endpoints for searching mirrored Projects/Tasks
-- Intel fixture ingestion + /v2 Context Pack retrieval with progressive disclosure endpoints
-- URL ingestion + worker-based fetch/extract/enrich pipeline for intel articles
-- Docker quickstart and tests exist
+- FastAPI + Postgres + Alembic.
+- Authenticated `/v1` endpoints for mirrored Projects/Tasks sync + search.
+- Intel fixture ingestion and intel URL ingestion.
+- Worker-based fetch/extract/sectionise/enrich pipeline for intel articles.
+- `/v2/context/pack` and progressive disclosure endpoints over intel content.
+- Phase 1 research ingestion:
+  - Source catalogue upsert/list under `/v2/research/sources*`.
+  - Ingestion run queue/status under `/v2/research/ingest/*`.
+  - Worker-driven source fetch/discovery with deterministic dedupe and raw payload storage.
+- Dockerized test workflow (`docker compose run --rm api pytest`).
 
-## MVP priority (now)
-URL ingestion with fetch/extract and LLM enrichment is implemented and feeds the existing intel-only /v2 Context Pack.
+## Implemented in this phase
+- New tables:
+  - `research_sources`
+  - `research_source_policies`
+  - `research_ingestion_runs`
+  - `research_documents`
+- New worker behavior in `app.research.worker`:
+  - claims queued runs
+  - discovers candidate URLs from feeds/sitemaps/html listings
+  - applies deterministic document identity + dedupe
+  - fetches and stores raw payload + fetch metadata
+  - records run counters and bounded errors
+- Added readiness endpoint:
+  - `GET /ready`
 
-This MUST NOT break or alter existing /v1 projects/tasks behaviour.
-
-## Implemented /v2 API surface (stable)
-### Context Pack
+## Implemented API surface (runtime)
+### Existing `/v2` intel retrieval
 - `POST /v2/context/pack`
-  - Input:
-    - query: string
-    - topics?: string[]
-    - token_budget?: int
-    - recency_days?: int
-    - max_items?: int
-  - Output:
-    - pack:
-      - items[]: { article_id, title, url, signals[], summary, citations[] }
-    - retrieval_confidence: "high" | "med" | "low"
-    - next_action: "proceed" | "refine_query" | "expand_sections"
-    - trace: { trace_id, retrieved_article_ids[], timing_ms }
-
-### Progressive disclosure
 - `GET /v2/intel/articles/{article_id}/outline`
 - `POST /v2/intel/articles/{article_id}/sections`
 - `POST /v2/intel/articles/{article_id}/chunks:search`
 
-### Ingestion (fixtures)
-- `POST /v2/intel/ingest` ingests checked-in fixtures into Postgres (deterministic).
+### Existing `/v2` intel ingestion
+- `POST /v2/intel/ingest`
+- `POST /v2/intel/ingest_urls`
+- `GET /v2/intel/articles/{article_id}`
 
-### URL ingestion + LLM enrichment
-- `POST /v2/intel/ingest_urls`:
-  - accepts list of URLs; queues ingestion jobs; returns job_id/article_id per URL
-- Status:
-  - `GET /v2/intel/articles/{article_id}` returns job/status and includes enrichment outputs when ready
+### New `/v2` research phase 1 ingestion
+- `POST /v2/research/sources/upsert`
+- `GET /v2/research/sources?topic_key=...`
+- `POST /v2/research/ingest/run`
+- `GET /v2/research/ingest/runs/{run_id}`
 
-## Storage (MVP)
-Current intel tables:
-- intel_articles (signals/summary/outline/topics + fetch/extraction/enrichment metadata + status)
-- intel_article_sections (content + FTS index)
-- intel_ingest_jobs (queue for URL ingestion)
+### Existing `/v1` sync/search
+- `POST /v1/projects/sync`
+- `POST /v1/tasks/sync`
+- `POST /v1/projects/search`
+- `POST /v1/tasks/search`
 
-## Worker (Phase 3)
-Run locally:
-- `docker compose run --rm api python -m app.intel.worker --once`
+## Current storage
+- `projects`
+- `tasks`
+- `intel_articles`
+- `intel_article_sections`
+- `intel_ingest_jobs`
+- `research_sources`
+- `research_source_policies`
+- `research_ingestion_runs`
+- `research_documents`
 
-## Actions integration (Phase 4)
-ChatGPT Actions assets and docs are available:
-- OpenAPI schema: adapters/chatgpt_actions/openapi.yaml (read-only endpoints)
-- GPT instructions: adapters/chatgpt_actions/gpt_instructions.md
-- Setup guide: docs/chatgpt_actions_setup.md
-- Cloudflare Tunnel guide: docs/deployment/cloudflare_tunnel.md
+## Current worker model
+- Intel worker command:
+  - `docker compose run --rm api python -m app.intel.worker --once`
+- Research worker command:
+  - `docker compose run --rm api python -m app.research.worker --once`
 
-## Drift prevention
-Whenever code changes meaningfully affect:
-- API contracts
-- schemas or migrations
-- verification commands
-update this file and mirror in README.
+## Gaps against the research ingestion target
+- No extraction/chunk/embedding/vector stage for research documents yet (Phase 2+).
+- No dedicated `/v2/research/context/pack` retrieval endpoints yet (Phase 4+).
+- No retrieval query log table yet.
+- Governance controls are baseline only:
+  - allowlist and per-source rate controls exist
+  - robots strict mode exists
+  - advanced error budgets/backpressure/dr dashboards are pending
 
-
-## ChatGPT Actions integration (Plus plan)
-- This service can be used as an external knowledge base for ChatGPT via a Custom GPT with Actions.
-- See: docs/chatgpt_actions_setup.md and adapters/chatgpt_actions/
-- Expose the API over HTTPS (recommended: Cloudflare Tunnel). See: docs/deployment/cloudflare_tunnel.md
-
+## Actions integration status
+- ChatGPT Actions assets currently expose read-only intel retrieval endpoints:
+  - `adapters/chatgpt_actions/openapi.yaml`
+  - `adapters/chatgpt_actions/gpt_instructions.md`
+- HTTPS exposure guidance:
+  - `docs/chatgpt_actions_setup.md`
+  - `docs/deployment/cloudflare_tunnel.md`
 
 ## Health endpoints
-- `GET /health` liveness probe (no auth)
-- `GET /ready` readiness probe (checks DB)
+- `GET /health` (liveness/readiness against DB)
+- `GET /ready` (readiness against DB)
+- `GET /version`
 
-## Edge Integration
+## Edge integration
 - Entry service: `api` on `8001`
 - Dev route: `http://context-api.localhost`
-- Run with `make dev` (shared edge + compose.edge.yml).
+- Run with `make dev` using shared `edge` network and `compose.edge.yml`.
+
+## Drift prevention
+If changes affect API contracts, migrations, verification commands, or phase status:
+- update this file first,
+- then update `README.md` and supporting contract docs.
