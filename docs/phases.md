@@ -170,7 +170,7 @@ Definition of done:
 - Score breakdown is stored and inspectable per document/query.
 - Dashboards/queries can show ingestion failures, lag, and top sources.
 
-### Phase 6 — Production hardening
+### Phase 6 — Production hardening (implemented)
 Scope:
 - Rate controls, retry/backoff policy, backpressure, disaster recovery drills.
 

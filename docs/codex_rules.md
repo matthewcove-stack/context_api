@@ -19,6 +19,7 @@
 ## Governance and safety
 - Use allowlisted sources only.
 - Respect per-source crawl policy (rate, robots, fetch bounds, retries/backoff).
+- Respect source cooldown controls after repeated failures; do not bypass cooldown in worker logic.
 - Never place secrets in code, logs, fixtures, docs, or tests.
 - Redaction must be applied before logging request/response payloads containing tokens or credentials.
 

@@ -36,6 +36,9 @@ class ResearchSourceRecord(BaseModel):
     poll_interval_minutes: int
     rate_limit_per_hour: int
     source_weight: float = 1.0
+    consecutive_failures: int = 0
+    cooldown_until: Optional[datetime] = None
+    last_error: Optional[str] = None
     robots_mode: Literal["strict", "ignore"]
     max_items_per_run: int
 
@@ -180,10 +183,12 @@ class ResearchOpsSummaryResponse(BaseModel):
     topic_key: str
     sources_total: int = 0
     sources_enabled: int = 0
+    sources_in_cooldown: int = 0
     documents_total: int = 0
     documents_embedded: int = 0
     documents_failed: int = 0
     runs_open: int = 0
     runs_failed_24h: int = 0
+    run_failure_rate_24h: float = 0.0
     retrieval_queries_24h: int = 0
     retrieval_errors_24h: int = 0

@@ -709,6 +709,9 @@ def list_research_sources(
             research_source_policies.c.max_items_per_run,
             research_source_policies.c.source_weight,
             research_source_policies.c.last_polled_at,
+            research_source_policies.c.consecutive_failures,
+            research_source_policies.c.cooldown_until,
+            research_source_policies.c.last_error,
         )
         .join(
             research_source_policies,
@@ -736,6 +739,65 @@ def set_research_source_polled(
             research_source_policies.update()
             .where(research_source_policies.c.source_id == source_id)
             .values(last_polled_at=text("now()"), updated_at=text("now()"))
+        )
+
+
+def get_research_source_policy(
+    engine: Engine,
+    *,
+    source_id: str,
+) -> Optional[Dict[str, Any]]:
+    stmt = select(research_source_policies).where(research_source_policies.c.source_id == source_id)
+    with engine.begin() as conn:
+        row = conn.execute(stmt).mappings().first()
+    return dict(row) if row else None
+
+
+def mark_research_source_success(
+    engine: Engine,
+    *,
+    source_id: str,
+) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            research_source_policies.update()
+            .where(research_source_policies.c.source_id == source_id)
+            .values(
+                last_polled_at=text("now()"),
+                consecutive_failures=0,
+                cooldown_until=None,
+                last_error=None,
+                updated_at=text("now()"),
+            )
+        )
+
+
+def mark_research_source_failure(
+    engine: Engine,
+    *,
+    source_id: str,
+    error: str,
+    failure_threshold: int,
+    cooldown_minutes: int,
+) -> None:
+    policy = get_research_source_policy(engine, source_id=source_id)
+    current_failures = int((policy or {}).get("consecutive_failures") or 0)
+    next_failures = current_failures + 1
+    values: Dict[str, Any] = {
+        "last_polled_at": text("now()"),
+        "consecutive_failures": next_failures,
+        "last_error": error[:500],
+        "updated_at": text("now()"),
+    }
+    if next_failures >= max(failure_threshold, 1):
+        values["cooldown_until"] = text(f"now() + interval '{max(cooldown_minutes, 1)} minutes'")
+    else:
+        values["cooldown_until"] = None
+    with engine.begin() as conn:
+        conn.execute(
+            research_source_policies.update()
+            .where(research_source_policies.c.source_id == source_id)
+            .values(**values)
         )
 
 
@@ -1129,11 +1191,16 @@ def list_due_research_sources(engine: Engine) -> List[Dict[str, Any]]:
             p.rate_limit_per_hour,
             p.robots_mode,
             p.max_items_per_run,
+            p.source_weight,
             p.last_polled_at
         FROM research_sources s
         JOIN research_source_policies p
           ON p.source_id = s.source_id
         WHERE s.enabled = true
+          AND (
+            p.cooldown_until IS NULL
+            OR p.cooldown_until <= now()
+          )
           AND (
             p.last_polled_at IS NULL
             OR now() - p.last_polled_at >= (p.poll_interval_minutes * interval '1 minute')
@@ -1505,9 +1572,15 @@ def get_research_ops_summary(
         WITH source_stats AS (
             SELECT
                 count(*) AS sources_total,
-                count(*) FILTER (WHERE enabled = true) AS sources_enabled
-            FROM research_sources
-            WHERE topic_key = :topic_key
+                count(*) FILTER (WHERE s.enabled = true) AS sources_enabled,
+                count(*) FILTER (
+                    WHERE s.enabled = true
+                      AND p.cooldown_until IS NOT NULL
+                      AND p.cooldown_until > now()
+                ) AS sources_in_cooldown
+            FROM research_sources s
+            JOIN research_source_policies p ON p.source_id = s.source_id
+            WHERE s.topic_key = :topic_key
         ),
         doc_stats AS (
             SELECT
@@ -1521,7 +1594,17 @@ def get_research_ops_summary(
         run_stats AS (
             SELECT
                 count(*) FILTER (WHERE status IN ('queued', 'running')) AS runs_open,
-                count(*) FILTER (WHERE status = 'failed' AND created_at >= now() - interval '24 hours') AS runs_failed_24h
+                count(*) FILTER (WHERE status = 'failed' AND created_at >= now() - interval '24 hours') AS runs_failed_24h,
+                CASE
+                    WHEN count(*) FILTER (WHERE created_at >= now() - interval '24 hours') = 0 THEN 0.0
+                    ELSE (
+                        count(*) FILTER (
+                            WHERE status = 'failed'
+                              AND created_at >= now() - interval '24 hours'
+                        )::float
+                        / count(*) FILTER (WHERE created_at >= now() - interval '24 hours')::float
+                    )
+                END AS run_failure_rate_24h
             FROM research_ingestion_runs
             WHERE topic_key = :topic_key
         ),

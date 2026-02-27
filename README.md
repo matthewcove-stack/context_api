@@ -55,6 +55,12 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 - `POST /v2/research/retrieval/feedback`
 - `GET /v2/research/ops/summary?topic_key=<topic>`
 
+## Research Phase 6 hardening controls
+- `RESEARCH_SOURCE_FAILURE_THRESHOLD` (default `3`)
+- `RESEARCH_SOURCE_COOLDOWN_MINUTES` (default `60`)
+- `RESEARCH_RUN_MAX_NEW_ITEMS` (default `0` = unbounded)
+- Runbook: `docs/research_operations.md`
+
 ## Worker
 - `docker compose run --rm api python -m app.intel.worker --once`
 - `docker compose run --rm api python -m app.research.worker --once`

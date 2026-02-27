@@ -26,6 +26,8 @@ from app.storage.db import (
     mark_research_document_fetched,
     mark_research_document_extracted,
     mark_research_ingestion_run_finished,
+    mark_research_source_failure,
+    mark_research_source_success,
     replace_research_chunks,
     replace_research_embeddings,
     set_research_source_polled,
@@ -83,7 +85,8 @@ def _process_source(
     *,
     run_id: Any,
     source: Dict[str, Any],
-) -> Dict[str, int]:
+    max_new_items: int = 0,
+) -> Dict[str, Any]:
     source_id = str(source["source_id"])
     base_url = str(source.get("base_url_canonical") or source.get("base_url_original") or "")
     kind = str(source.get("kind") or "html_listing")
@@ -96,17 +99,20 @@ def _process_source(
     embedding_model_id = os.getenv("RESEARCH_EMBEDDING_MODEL", "hash-64")
     embedding_api_key = os.getenv("OPENAI_API_KEY", "")
 
-    counters = {"seen": 0, "new": 0, "deduped": 0, "failed": 0}
+    counters: Dict[str, Any] = {"seen": 0, "new": 0, "deduped": 0, "failed": 0}
+    source_error = ""
     source_fetch = _fetch_with_retries(base_url)
     source_status = int(source_fetch.get("status_code") or 0)
     if source_status >= 400:
         counters["failed"] += 1
+        source_error = f"source_fetch_failed status={source_status}"
         append_research_run_error(
             engine,
             run_id=run_id,
             message=f"source_fetch_failed source_id={source_id} status={source_status} url={base_url}",
         )
         set_research_source_polled(engine, source_id=source_id)
+        counters["source_error"] = source_error
         return counters
 
     discovered = discover_candidate_items(
@@ -117,6 +123,8 @@ def _process_source(
     )
     last_request_at: float | None = None
     for item in discovered:
+        if max_new_items > 0 and counters["new"] >= max_new_items:
+            break
         item_url = str(item.get("url") or "").strip()
         if not item_url:
             continue
@@ -130,6 +138,7 @@ def _process_source(
                     run_id=run_id,
                     message=f"robots_blocked source_id={source_id} url={item_url}",
                 )
+                source_error = "robots_blocked"
                 continue
 
         document_id = compute_document_id(
@@ -158,6 +167,7 @@ def _process_source(
         raw_payload = str(item_fetch.get("html") or "")
         if item_status >= 400 or not raw_payload:
             counters["failed"] += 1
+            source_error = f"item_fetch_failed status={item_status}"
             mark_research_document_failed(
                 engine,
                 document_id=document_id,
@@ -195,6 +205,7 @@ def _process_source(
         extracted_text = str(extraction.get("text") or "").strip()
         if not extracted_text:
             counters["failed"] += 1
+            source_error = "extraction_failed"
             mark_research_document_failed(
                 engine,
                 document_id=document_id,
@@ -228,6 +239,7 @@ def _process_source(
         )
         if not chunks:
             counters["failed"] += 1
+            source_error = "chunking_failed"
             mark_research_document_failed(
                 engine,
                 document_id=document_id,
@@ -251,6 +263,7 @@ def _process_source(
             )
         except Exception as exc:
             counters["failed"] += 1
+            source_error = f"embedding_failed error={exc}"
             mark_research_document_failed(
                 engine,
                 document_id=document_id,
@@ -268,6 +281,7 @@ def _process_source(
             continue
         if len(vectors) != len(chunks):
             counters["failed"] += 1
+            source_error = "embedding_mismatch"
             mark_research_document_failed(
                 engine,
                 document_id=document_id,
@@ -305,6 +319,7 @@ def _process_source(
         )
 
     set_research_source_polled(engine, source_id=source_id)
+    counters["source_error"] = source_error
     return counters
 
 
@@ -319,9 +334,29 @@ def process_run(engine: Any, run: Dict[str, Any]) -> None:
         source_ids=source_ids or None,
         enabled_only=True,
     )
+    failure_threshold = _int_env("RESEARCH_SOURCE_FAILURE_THRESHOLD", 3)
+    cooldown_minutes = _int_env("RESEARCH_SOURCE_COOLDOWN_MINUTES", 60)
+    run_new_item_budget = _int_env("RESEARCH_RUN_MAX_NEW_ITEMS", 0)
+    run_new_items = 0
     try:
         for source in sources:
-            counters = _process_source(engine, run_id=run_id, source=source)
+            source_id = str(source.get("source_id") or "")
+            remaining_budget = 0
+            if run_new_item_budget > 0:
+                remaining_budget = max(run_new_item_budget - run_new_items, 0)
+                if remaining_budget <= 0:
+                    append_research_run_error(
+                        engine,
+                        run_id=run_id,
+                        message=f"run_budget_exhausted max_new_items={run_new_item_budget}",
+                    )
+                    break
+            counters = _process_source(
+                engine,
+                run_id=run_id,
+                source=source,
+                max_new_items=remaining_budget,
+            )
             update_research_run_counters(
                 engine,
                 run_id=run_id,
@@ -330,6 +365,25 @@ def process_run(engine: Any, run: Dict[str, Any]) -> None:
                 items_deduped=counters["deduped"],
                 items_failed=counters["failed"],
             )
+            run_new_items += int(counters["new"])
+            if source_id:
+                if int(counters["failed"]) > 0:
+                    mark_research_source_failure(
+                        engine,
+                        source_id=source_id,
+                        error=str(counters.get("source_error") or "source_processing_failed"),
+                        failure_threshold=failure_threshold,
+                        cooldown_minutes=cooldown_minutes,
+                    )
+                else:
+                    mark_research_source_success(engine, source_id=source_id)
+            if run_new_item_budget > 0 and run_new_items >= run_new_item_budget:
+                append_research_run_error(
+                    engine,
+                    run_id=run_id,
+                    message=f"run_budget_exhausted max_new_items={run_new_item_budget}",
+                )
+                break
         mark_research_ingestion_run_finished(engine, run_id=run_id, status="completed")
         _safe_log("research_run_completed", run_id=str(run_id), topic_key=topic_key)
     except Exception as exc:  # pragma: no cover - defensive runtime path

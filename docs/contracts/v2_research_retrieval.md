@@ -75,6 +75,8 @@ Response:
 
 Response includes:
 - source counts
+- source cooldown counts
 - document status counts
 - open/failed run counters
+- 24h run failure rate
 - retrieval query/error counters (24h)

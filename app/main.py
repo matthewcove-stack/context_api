@@ -699,6 +699,9 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                     poll_interval_minutes=int(row.get("poll_interval_minutes") or 60),
                     rate_limit_per_hour=int(row.get("rate_limit_per_hour") or 30),
                     source_weight=float(row.get("source_weight") or 1.0),
+                    consecutive_failures=int(row.get("consecutive_failures") or 0),
+                    cooldown_until=row.get("cooldown_until"),
+                    last_error=(str(row.get("last_error")) if row.get("last_error") else None),
                     robots_mode=row.get("robots_mode") or "strict",
                     max_items_per_run=int(row.get("max_items_per_run") or 50),
                 )
@@ -1026,11 +1029,13 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
             topic_key=normalized_topic,
             sources_total=int(summary.get("sources_total") or 0),
             sources_enabled=int(summary.get("sources_enabled") or 0),
+            sources_in_cooldown=int(summary.get("sources_in_cooldown") or 0),
             documents_total=int(summary.get("documents_total") or 0),
             documents_embedded=int(summary.get("documents_embedded") or 0),
             documents_failed=int(summary.get("documents_failed") or 0),
             runs_open=int(summary.get("runs_open") or 0),
             runs_failed_24h=int(summary.get("runs_failed_24h") or 0),
+            run_failure_rate_24h=float(summary.get("run_failure_rate_24h") or 0.0),
             retrieval_queries_24h=int(summary.get("retrieval_queries_24h") or 0),
             retrieval_errors_24h=int(summary.get("retrieval_errors_24h") or 0),
         )

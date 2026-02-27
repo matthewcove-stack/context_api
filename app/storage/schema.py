@@ -129,7 +129,11 @@ research_source_policies = Table(
     Column("max_items_per_run", Integer, nullable=False, server_default=text("50")),
     Column("source_weight", Float, nullable=False, server_default=text("1.0")),
     Column("last_polled_at", DateTime(timezone=True), nullable=True),
+    Column("consecutive_failures", Integer, nullable=False, server_default=text("0")),
+    Column("cooldown_until", DateTime(timezone=True), nullable=True),
+    Column("last_error", Text, nullable=True),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Index("ix_research_source_policies_cooldown_until", "cooldown_until"),
 )
 
 research_ingestion_runs = Table(

@@ -24,6 +24,10 @@
   - Retrieval uses hybrid scoring (`lexical`, `embedding`, `recency`, `source_weight`).
   - Feedback capture endpoint persists operator judgments.
   - Ops summary endpoint exposes ingestion/retrieval counters.
+- Phase 6 production hardening:
+  - Source failure counters and automatic cooldown (`consecutive_failures`, `cooldown_until`).
+  - Schedule enqueue honors cooldown to prevent hot-loop retries.
+  - Run-level backpressure budget (`RESEARCH_RUN_MAX_NEW_ITEMS`) stops runaway ingestion growth.
 - Dockerized test workflow (`docker compose run --rm api pytest`).
 
 ## Implemented in this phase
@@ -101,7 +105,8 @@
 - Governance controls are baseline only:
   - allowlist and per-source rate controls exist
   - robots strict mode exists
-  - advanced error budgets/backpressure/dr dashboards are pending
+  - source cooldown + run backpressure controls are implemented
+  - DR runbook is documented in `docs/research_operations.md`
 
 ## Actions integration status
 - ChatGPT Actions assets currently expose read-only intel retrieval endpoints:
