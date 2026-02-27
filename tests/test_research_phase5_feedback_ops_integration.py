@@ -164,4 +164,26 @@ def test_phase5_feedback_and_ops_summary() -> None:
     assert source_items
     assert source_items[0]["source_id"] == source_id
     assert source_items[0]["documents_total"] >= 1
+
+    disable = client.post(f"/v2/research/sources/{source_id}/disable", headers=headers)
+    assert disable.status_code == 200
+    assert disable.json()["enabled"] is False
+
+    enable = client.post(f"/v2/research/sources/{source_id}/enable", headers=headers)
+    assert enable.status_code == 200
+    assert enable.json()["enabled"] is True
+
+    review_queue = client.get(f"/v2/research/review/queue?topic_key={topic_key}&limit=5", headers=headers)
+    assert review_queue.status_code == 200
+    queue_items = review_queue.json()["items"]
+    assert queue_items
+    assert queue_items[0]["trace_id"]
+
+    redact = client.post(
+        "/v2/research/governance/redact",
+        json={"topic_key": topic_key, "older_than_days": 0},
+        headers=headers,
+    )
+    assert redact.status_code == 200
+    assert int(redact.json()["redacted_documents"]) >= 1
     server.shutdown()

@@ -14,6 +14,10 @@ from app.config import Settings, settings as default_settings
 from app.research.contracts import (
     ResearchFeedbackRequest,
     ResearchFeedbackResponse,
+    ResearchRedactRequest,
+    ResearchRedactResponse,
+    ResearchReviewQueueItem,
+    ResearchReviewQueueResponse,
     ResearchChunkSearchRequest,
     ResearchChunkSearchResponse,
     ResearchContextPackRequest,
@@ -28,6 +32,7 @@ from app.research.contracts import (
     ResearchRunCounters,
     ResearchOpsSummaryResponse,
     ResearchSourceMetricRecord,
+    ResearchSourceModerationResponse,
     ResearchSourceMetricsResponse,
     ResearchScoreBreakdown,
     ResearchSignal,
@@ -84,11 +89,14 @@ from app.storage.db import (
     insert_research_relevance_scores,
     insert_research_retrieval_feedback,
     get_research_ops_summary,
+    list_research_review_queue,
     list_research_source_metrics,
+    redact_research_raw_payloads,
     search_research_chunks,
     search_research_document_chunks,
     search_projects,
     search_tasks,
+    set_research_source_enabled,
     upsert_research_source,
     get_research_document,
     upsert_intel_article_seed,
@@ -711,6 +719,40 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
             )
         return ResearchSourceListResponse(items=items)
 
+    @app.post(
+        "/v2/research/sources/{source_id}/disable",
+        response_model=ResearchSourceModerationResponse,
+    )
+    def disable_research_source_endpoint(
+        source_id: str,
+        _: None = Depends(require_bearer),
+    ) -> ResearchSourceModerationResponse:
+        updated = set_research_source_enabled(
+            app.state.engine,
+            source_id=source_id,
+            enabled=False,
+        )
+        if not updated:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found")
+        return ResearchSourceModerationResponse(source_id=source_id, enabled=False, status="updated")
+
+    @app.post(
+        "/v2/research/sources/{source_id}/enable",
+        response_model=ResearchSourceModerationResponse,
+    )
+    def enable_research_source_endpoint(
+        source_id: str,
+        _: None = Depends(require_bearer),
+    ) -> ResearchSourceModerationResponse:
+        updated = set_research_source_enabled(
+            app.state.engine,
+            source_id=source_id,
+            enabled=True,
+        )
+        if not updated:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found")
+        return ResearchSourceModerationResponse(source_id=source_id, enabled=True, status="updated")
+
     @app.post("/v2/research/ingest/run", response_model=ResearchIngestRunResponse)
     def queue_research_ingest_run_endpoint(
         payload: ResearchIngestRunRequest,
@@ -1072,6 +1114,53 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
             for row in rows
         ]
         return ResearchSourceMetricsResponse(topic_key=normalized_topic, items=items)
+
+    @app.post("/v2/research/governance/redact", response_model=ResearchRedactResponse)
+    def research_governance_redact_endpoint(
+        payload: ResearchRedactRequest,
+        _: None = Depends(require_bearer),
+    ) -> ResearchRedactResponse:
+        normalized_topic = payload.topic_key.strip().lower()
+        redacted = redact_research_raw_payloads(
+            app.state.engine,
+            topic_key=normalized_topic,
+            older_than_days=payload.older_than_days,
+        )
+        return ResearchRedactResponse(
+            topic_key=normalized_topic,
+            older_than_days=payload.older_than_days,
+            redacted_documents=redacted,
+        )
+
+    @app.get("/v2/research/review/queue", response_model=ResearchReviewQueueResponse)
+    def research_review_queue_endpoint(
+        topic_key: str,
+        limit: int = 20,
+        _: None = Depends(require_bearer),
+    ) -> ResearchReviewQueueResponse:
+        normalized_topic = topic_key.strip().lower()
+        rows = list_research_review_queue(
+            app.state.engine,
+            topic_key=normalized_topic,
+            limit=limit,
+        )
+        items = [
+            ResearchReviewQueueItem(
+                query_log_id=str(row.get("query_log_id")),
+                trace_id=str(row.get("trace_id") or ""),
+                query_text=str(row.get("query_text") or ""),
+                candidate_count=int(row.get("candidate_count") or 0),
+                returned_document_ids=[str(item) for item in (row.get("returned_document_ids") or [])],
+                returned_chunk_ids=[str(item) for item in (row.get("returned_chunk_ids") or [])],
+                status=str(row.get("status") or "ok"),
+                error=(str(row.get("error")) if row.get("error") else None),
+                useful_count=int(row.get("useful_count") or 0),
+                not_useful_count=int(row.get("not_useful_count") or 0),
+                created_at=row.get("created_at"),
+            )
+            for row in rows
+        ]
+        return ResearchReviewQueueResponse(topic_key=normalized_topic, items=items)
 
     return app
 

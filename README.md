@@ -55,12 +55,17 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 - `POST /v2/research/retrieval/feedback`
 - `GET /v2/research/ops/summary?topic_key=<topic>`
 - `GET /v2/research/ops/sources?topic_key=<topic>&limit=<n>`
+- `POST /v2/research/sources/{source_id}/disable`
+- `POST /v2/research/sources/{source_id}/enable`
+- `POST /v2/research/governance/redact`
+- `GET /v2/research/review/queue?topic_key=<topic>&limit=<n>`
 
 ## Research Phase 6 hardening controls
 - `RESEARCH_SOURCE_FAILURE_THRESHOLD` (default `3`)
 - `RESEARCH_SOURCE_COOLDOWN_MINUTES` (default `60`)
 - `RESEARCH_RUN_MAX_NEW_ITEMS` (default `0` = unbounded)
 - Runbook: `docs/research_operations.md`
+- Retention utility: `python -m app.research.retention --topic-key <topic> --older-than-days 30`
 
 ## Worker
 - `docker compose run --rm api python -m app.intel.worker --once`

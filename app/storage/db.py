@@ -729,6 +729,21 @@ def list_research_sources(
     return [dict(row) for row in rows]
 
 
+def set_research_source_enabled(
+    engine: Engine,
+    *,
+    source_id: str,
+    enabled: bool,
+) -> bool:
+    with engine.begin() as conn:
+        result = conn.execute(
+            research_sources.update()
+            .where(research_sources.c.source_id == source_id)
+            .values(enabled=enabled, updated_at=text("now()"))
+        )
+    return int(result.rowcount or 0) > 0
+
+
 def set_research_source_polled(
     engine: Engine,
     *,
@@ -1668,4 +1683,72 @@ def list_research_source_metrics(
     params = {"topic_key": topic_key, "limit": max(limit, 1)}
     with engine.begin() as conn:
         rows = conn.execute(text(sql), params).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def redact_research_raw_payloads(
+    engine: Engine,
+    *,
+    topic_key: str,
+    older_than_days: int,
+) -> int:
+    sql = """
+        UPDATE research_documents d
+        SET raw_payload = NULL,
+            updated_at = now()
+        FROM research_sources s
+        WHERE s.source_id = d.source_id
+          AND s.topic_key = :topic_key
+          AND d.raw_payload IS NOT NULL
+          AND d.created_at < now() - (:older_than_days * interval '1 day')
+    """
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(sql),
+            {"topic_key": topic_key, "older_than_days": max(older_than_days, 0)},
+        )
+    return int(result.rowcount or 0)
+
+
+def list_research_review_queue(
+    engine: Engine,
+    *,
+    topic_key: str,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    sql = """
+        WITH feedback_rollup AS (
+            SELECT
+                trace_id,
+                count(*) FILTER (WHERE verdict = 'useful') AS useful_count,
+                count(*) FILTER (WHERE verdict = 'not_useful') AS not_useful_count
+            FROM research_retrieval_feedback
+            GROUP BY trace_id
+        )
+        SELECT
+            q.query_log_id,
+            q.trace_id,
+            q.query_text,
+            q.candidate_count,
+            q.returned_document_ids,
+            q.returned_chunk_ids,
+            q.status,
+            q.error,
+            q.created_at,
+            coalesce(f.useful_count, 0) AS useful_count,
+            coalesce(f.not_useful_count, 0) AS not_useful_count
+        FROM research_query_logs q
+        LEFT JOIN feedback_rollup f ON f.trace_id = q.trace_id
+        WHERE q.topic_key = :topic_key
+        ORDER BY
+            coalesce(f.not_useful_count, 0) DESC,
+            CASE WHEN q.status = 'error' THEN 1 ELSE 0 END DESC,
+            q.created_at DESC
+        LIMIT :limit
+    """
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text(sql),
+            {"topic_key": topic_key, "limit": max(limit, 1)},
+        ).mappings().all()
     return [dict(row) for row in rows]

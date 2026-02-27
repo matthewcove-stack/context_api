@@ -25,6 +25,10 @@
   - Feedback capture endpoint persists operator judgments.
   - Ops summary endpoint exposes ingestion/retrieval counters.
   - Source metrics endpoint exposes per-source failure/throughput status.
+  - Governance controls:
+    - source moderation endpoints (`enable`/`disable`)
+    - redaction endpoint for raw payload retention hygiene
+    - review queue endpoint for operator triage
 - Phase 6 production hardening:
   - Source failure counters and automatic cooldown (`consecutive_failures`, `cooldown_until`).
   - Schedule enqueue honors cooldown to prevent hot-loop retries.
@@ -73,6 +77,10 @@
 - `POST /v2/research/retrieval/feedback`
 - `GET /v2/research/ops/summary?topic_key=...`
 - `GET /v2/research/ops/sources?topic_key=...&limit=...`
+- `POST /v2/research/sources/{source_id}/disable`
+- `POST /v2/research/sources/{source_id}/enable`
+- `POST /v2/research/governance/redact`
+- `GET /v2/research/review/queue?topic_key=...&limit=...`
 
 ### Existing `/v1` sync/search
 - `POST /v1/projects/sync`

@@ -211,3 +211,39 @@ class ResearchSourceMetricRecord(BaseModel):
 class ResearchSourceMetricsResponse(BaseModel):
     topic_key: str
     items: List[ResearchSourceMetricRecord] = Field(default_factory=list)
+
+
+class ResearchSourceModerationResponse(BaseModel):
+    source_id: str
+    enabled: bool
+    status: Literal["updated"]
+
+
+class ResearchRedactRequest(BaseModel):
+    topic_key: str
+    older_than_days: int = Field(default=30, ge=0, le=3650)
+
+
+class ResearchRedactResponse(BaseModel):
+    topic_key: str
+    older_than_days: int
+    redacted_documents: int
+
+
+class ResearchReviewQueueItem(BaseModel):
+    query_log_id: str
+    trace_id: str
+    query_text: str
+    candidate_count: int = 0
+    returned_document_ids: List[str] = Field(default_factory=list)
+    returned_chunk_ids: List[str] = Field(default_factory=list)
+    status: str
+    error: Optional[str] = None
+    useful_count: int = 0
+    not_useful_count: int = 0
+    created_at: Optional[datetime] = None
+
+
+class ResearchReviewQueueResponse(BaseModel):
+    topic_key: str
+    items: List[ResearchReviewQueueItem] = Field(default_factory=list)

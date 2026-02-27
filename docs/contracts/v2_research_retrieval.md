@@ -97,3 +97,28 @@ Response:
   - `documents_embedded`
   - `documents_failed`
   - `retrieval_queries_24h`
+
+## Endpoint: `POST /v2/research/sources/{source_id}/disable`
+## Endpoint: `POST /v2/research/sources/{source_id}/enable`
+
+Response:
+- `source_id`
+- `enabled`
+- `status` (`updated`)
+
+## Endpoint: `POST /v2/research/governance/redact`
+
+Request:
+- `topic_key`
+- `older_than_days`
+
+Response:
+- `topic_key`
+- `older_than_days`
+- `redacted_documents`
+
+## Endpoint: `GET /v2/research/review/queue?topic_key=...&limit=...`
+
+Response:
+- `topic_key`
+- `items[]` with retrieval trace, candidate/returned IDs, status/error, and feedback counters
