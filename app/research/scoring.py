@@ -56,12 +56,16 @@ def blend_score(
     embedding: float,
     recency: float,
     source_weight: float,
+    lexical_weight: float = 0.45,
+    embedding_weight: float = 0.35,
+    recency_weight: float = 0.15,
+    source_weight_factor: float = 0.05,
 ) -> Dict[str, float]:
     total = (
-        0.45 * lexical
-        + 0.35 * embedding
-        + 0.15 * recency
-        + 0.05 * source_weight
+        lexical_weight * lexical
+        + embedding_weight * embedding
+        + recency_weight * recency
+        + source_weight_factor * source_weight
     )
     return {
         "total": _clamp(total),

@@ -13,6 +13,7 @@ from app.research.chunking import chunk_document
 from app.research.discovery import discover_candidate_items, extract_title_from_html, is_allowed_by_robots
 from app.research.embeddings import embed_texts
 from app.research.ids import compute_document_id
+from app.research.pdf_extract import extract_pdf_text
 from app.storage.db import (
     append_research_run_error,
     claim_next_research_ingestion_run,
@@ -164,8 +165,12 @@ def _process_source(
         last_request_at = _throttle_source(last_request_at, rate_limit_per_hour=rate_limit_per_hour)
         item_fetch = _fetch_with_retries(item_url)
         item_status = int(item_fetch.get("status_code") or 0)
-        raw_payload = str(item_fetch.get("html") or "")
-        if item_status >= 400 or not raw_payload:
+        content_type = str((item_fetch.get("headers") or {}).get("content-type") or "").lower()
+        content_bytes = item_fetch.get("content_bytes") or b""
+        is_pdf = "application/pdf" in content_type or item_url.lower().endswith(".pdf")
+        raw_payload = "" if is_pdf else str(item_fetch.get("html") or "")
+        has_payload = bool(content_bytes) if is_pdf else bool(raw_payload)
+        if item_status >= 400 or not has_payload:
             counters["failed"] += 1
             source_error = f"item_fetch_failed status={item_status}"
             mark_research_document_failed(
@@ -173,7 +178,7 @@ def _process_source(
                 document_id=document_id,
                 fetch_meta={
                     "http_status": item_status,
-                    "content_type": (item_fetch.get("headers") or {}).get("content-type"),
+                    "content_type": content_type,
                     "error": item_fetch.get("error"),
                 },
             )
@@ -184,24 +189,34 @@ def _process_source(
             )
             continue
 
-        content_hash = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
+        if is_pdf:
+            content_hash = hashlib.sha256(content_bytes).hexdigest()
+        else:
+            content_hash = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
         mark_research_document_fetched(
             engine,
             document_id=document_id,
-            title=extract_title_from_html(raw_payload) or None,
+            title=(extract_title_from_html(raw_payload) or None) if not is_pdf else None,
             raw_payload=raw_payload,
             content_hash=content_hash,
             fetch_meta={
                 "http_status": item_status,
-                "content_type": (item_fetch.get("headers") or {}).get("content-type"),
+                "content_type": content_type,
                 "etag": (item_fetch.get("headers") or {}).get("etag"),
                 "last_modified": (item_fetch.get("headers") or {}).get("last-modified"),
                 "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "binary_bytes": len(content_bytes) if is_pdf else 0,
+                "raw_payload_stored": not is_pdf,
                 "warnings": ["truncated"] if item_fetch.get("truncated") else [],
             },
         )
 
-        extraction = extract_readable_text(raw_payload, item_url)
+        if is_pdf:
+            extraction = extract_pdf_text(content_bytes)
+            extraction["published_at"] = None
+            extraction["confidence"] = 0.6 if extraction.get("text") else 0.0
+        else:
+            extraction = extract_readable_text(raw_payload, item_url)
         extracted_text = str(extraction.get("text") or "").strip()
         if not extracted_text:
             counters["failed"] += 1
@@ -211,7 +226,7 @@ def _process_source(
                 document_id=document_id,
                 fetch_meta={
                     "http_status": item_status,
-                    "content_type": (item_fetch.get("headers") or {}).get("content-type"),
+                    "content_type": content_type,
                     "error": "empty extracted text",
                 },
             )
@@ -228,6 +243,7 @@ def _process_source(
             extraction_meta={
                 "method": extraction.get("method"),
                 "confidence": extraction.get("confidence"),
+                "format": "pdf" if is_pdf else "html",
                 "warnings": extraction.get("warnings") or [],
             },
             published_at=extraction.get("published_at"),

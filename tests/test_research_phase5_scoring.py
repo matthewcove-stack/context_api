@@ -23,3 +23,18 @@ def test_blend_score_is_bounded() -> None:
     score = blend_score(lexical=0.9, embedding=0.8, recency=0.6, source_weight=0.5)
     assert 0.0 <= score["total"] <= 1.0
     assert score["lexical"] == 0.9
+
+
+def test_blend_score_respects_custom_weights() -> None:
+    default = blend_score(lexical=0.9, embedding=0.1, recency=0.1, source_weight=0.1)
+    custom = blend_score(
+        lexical=0.9,
+        embedding=0.1,
+        recency=0.1,
+        source_weight=0.1,
+        lexical_weight=0.1,
+        embedding_weight=0.8,
+        recency_weight=0.05,
+        source_weight_factor=0.05,
+    )
+    assert default["total"] > custom["total"]

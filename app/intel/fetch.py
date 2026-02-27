@@ -45,6 +45,7 @@ def fetch_url(url: str) -> Dict[str, Any]:
     response_headers: Dict[str, str] = {}
     truncated = False
     html = ""
+    content_bytes = b""
     with httpx.Client(follow_redirects=True, timeout=timeout_s, max_redirects=DEFAULT_MAX_REDIRECTS) as client:
         with client.stream("GET", url, headers=headers, follow_redirects=True) as response:
             response_headers = {key.lower(): value for key, value in response.headers.items()}
@@ -61,7 +62,8 @@ def fetch_url(url: str) -> Dict[str, Any]:
                     break
                 chunks.append(chunk)
                 total += len(chunk)
-            html = b"".join(chunks).decode("utf-8", errors="ignore")
+            content_bytes = b"".join(chunks)
+            html = content_bytes.decode("utf-8", errors="ignore")
             final_url = str(response.url)
             status_code = response.status_code
     return {
@@ -69,5 +71,6 @@ def fetch_url(url: str) -> Dict[str, Any]:
         "status_code": status_code,
         "headers": response_headers,
         "html": html,
+        "content_bytes": content_bytes,
         "truncated": truncated,
     }

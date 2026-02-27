@@ -831,6 +831,10 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
         max_items = max(payload.max_items or DEFAULT_RESEARCH_MAX_ITEMS, 1)
         topic_key = payload.topic_key.strip().lower()
         embedding_model_id = os.getenv("RESEARCH_EMBEDDING_MODEL", "hash-64")
+        lexical_weight = float(os.getenv("RESEARCH_SCORE_WEIGHT_LEXICAL", "0.45"))
+        embedding_weight = float(os.getenv("RESEARCH_SCORE_WEIGHT_EMBEDDING", "0.35"))
+        recency_weight = float(os.getenv("RESEARCH_SCORE_WEIGHT_RECENCY", "0.15"))
+        source_weight_factor = float(os.getenv("RESEARCH_SCORE_WEIGHT_SOURCE", "0.05"))
         query_vector: List[float] = []
         try:
             rows = search_research_chunks(
@@ -879,6 +883,10 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                     embedding=embedding_value,
                     recency=recency_value,
                     source_weight=source_weight_value,
+                    lexical_weight=lexical_weight,
+                    embedding_weight=embedding_weight,
+                    recency_weight=recency_weight,
+                    source_weight_factor=source_weight_factor,
                 )
                 merged = dict(row)
                 merged["_score"] = score

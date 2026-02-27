@@ -13,11 +13,16 @@ Operational controls for the research ingestion and retrieval pipeline.
 - `RESEARCH_RUN_MAX_NEW_ITEMS`:
   - max newly ingested documents per run before run exits early.
   - default: `0` (unbounded)
+- `RESEARCH_SCORE_WEIGHT_LEXICAL`, `RESEARCH_SCORE_WEIGHT_EMBEDDING`,
+  `RESEARCH_SCORE_WEIGHT_RECENCY`, `RESEARCH_SCORE_WEIGHT_SOURCE`:
+  - retrieval scoring blend weights for tuning.
+  - defaults: `0.45`, `0.35`, `0.15`, `0.05`
 
 ## Failure handling
 - Source-level failures increment `research_source_policies.consecutive_failures`.
 - On threshold breach, `cooldown_until` is set and schedule enqueue skips the source until cooldown expires.
 - Successful source processing resets consecutive failures and clears cooldown/error.
+- PDF documents (`application/pdf`) use the pypdf extraction path before chunking/embedding.
 
 ## Backpressure
 - The worker enforces a per-run new-item budget via `RESEARCH_RUN_MAX_NEW_ITEMS`.

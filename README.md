@@ -64,6 +64,10 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 - `RESEARCH_SOURCE_FAILURE_THRESHOLD` (default `3`)
 - `RESEARCH_SOURCE_COOLDOWN_MINUTES` (default `60`)
 - `RESEARCH_RUN_MAX_NEW_ITEMS` (default `0` = unbounded)
+- `RESEARCH_SCORE_WEIGHT_LEXICAL` (default `0.45`)
+- `RESEARCH_SCORE_WEIGHT_EMBEDDING` (default `0.35`)
+- `RESEARCH_SCORE_WEIGHT_RECENCY` (default `0.15`)
+- `RESEARCH_SCORE_WEIGHT_SOURCE` (default `0.05`)
 - Runbook: `docs/research_operations.md`
 - Retention utility: `python -m app.research.retention --topic-key <topic> --older-than-days 30`
 

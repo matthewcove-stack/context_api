@@ -33,6 +33,8 @@
   - Source failure counters and automatic cooldown (`consecutive_failures`, `cooldown_until`).
   - Schedule enqueue honors cooldown to prevent hot-loop retries.
   - Run-level backpressure budget (`RESEARCH_RUN_MAX_NEW_ITEMS`) stops runaway ingestion growth.
+  - PDF-aware extraction path for research documents (`application/pdf`).
+  - Env-driven scoring weight knobs for relevance tuning.
 - Dockerized test workflow (`docker compose run --rm api pytest`).
 
 ## Implemented in this phase
