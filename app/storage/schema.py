@@ -127,6 +127,7 @@ research_source_policies = Table(
     Column("rate_limit_per_hour", Integer, nullable=False, server_default=text("30")),
     Column("robots_mode", Text, nullable=False, server_default=text("'strict'")),
     Column("max_items_per_run", Integer, nullable=False, server_default=text("50")),
+    Column("source_weight", Float, nullable=False, server_default=text("1.0")),
     Column("last_polled_at", DateTime(timezone=True), nullable=True),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
 )
@@ -236,4 +237,36 @@ research_query_logs = Table(
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Index("ix_research_query_logs_topic_created_at", "topic_key", "created_at"),
     Index("ix_research_query_logs_trace_id", "trace_id", unique=True),
+)
+
+research_relevance_scores = Table(
+    "research_relevance_scores",
+    metadata,
+    Column("score_id", UUID(as_uuid=True), primary_key=True),
+    Column("trace_id", Text, nullable=False),
+    Column("topic_key", Text, nullable=False),
+    Column("query_text", Text, nullable=False),
+    Column("document_id", Text, ForeignKey("research_documents.document_id", ondelete="CASCADE"), nullable=False),
+    Column("chunk_id", Text, nullable=False),
+    Column("score_total", Float, nullable=False),
+    Column("score_lexical", Float, nullable=False),
+    Column("score_embedding", Float, nullable=False),
+    Column("score_recency", Float, nullable=False),
+    Column("score_source_weight", Float, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Index("ix_research_relevance_scores_trace", "trace_id", "created_at"),
+)
+
+research_retrieval_feedback = Table(
+    "research_retrieval_feedback",
+    metadata,
+    Column("feedback_id", UUID(as_uuid=True), primary_key=True),
+    Column("trace_id", Text, nullable=False),
+    Column("query_log_id", UUID(as_uuid=True), ForeignKey("research_query_logs.query_log_id", ondelete="SET NULL"), nullable=True),
+    Column("document_id", Text, ForeignKey("research_documents.document_id", ondelete="CASCADE"), nullable=False),
+    Column("chunk_id", Text, nullable=False),
+    Column("verdict", Text, nullable=False),
+    Column("notes", Text, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Index("ix_research_retrieval_feedback_trace", "trace_id", "created_at"),
 )

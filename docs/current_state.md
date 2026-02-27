@@ -20,6 +20,10 @@
   - `POST /v2/research/context/pack` returns bounded, citation-first retrieval packs.
   - `POST /v2/research/documents/{document_id}/chunks:search` supports progressive disclosure.
   - Retrieval queries are audited in `research_query_logs`.
+- Phase 5 relevance + feedback + observability:
+  - Retrieval uses hybrid scoring (`lexical`, `embedding`, `recency`, `source_weight`).
+  - Feedback capture endpoint persists operator judgments.
+  - Ops summary endpoint exposes ingestion/retrieval counters.
 - Dockerized test workflow (`docker compose run --rm api pytest`).
 
 ## Implemented in this phase
@@ -60,6 +64,10 @@
 - `POST /v2/research/context/pack`
 - `POST /v2/research/documents/{document_id}/chunks:search`
 
+### New `/v2` research phase 5 governance/ops
+- `POST /v2/research/retrieval/feedback`
+- `GET /v2/research/ops/summary?topic_key=...`
+
 ### Existing `/v1` sync/search
 - `POST /v1/projects/sync`
 - `POST /v1/tasks/sync`
@@ -80,6 +88,8 @@
 - `research_chunks`
 - `research_embeddings`
 - `research_query_logs`
+- `research_relevance_scores`
+- `research_retrieval_feedback`
 
 ## Current worker model
 - Intel worker command:

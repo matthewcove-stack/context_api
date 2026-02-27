@@ -18,6 +18,8 @@ from app.storage.schema import (
     research_chunks,
     research_embeddings,
     research_ingestion_runs,
+    research_relevance_scores,
+    research_retrieval_feedback,
     research_query_logs,
     research_source_policies,
     research_sources,
@@ -632,6 +634,7 @@ def upsert_research_source(
     rate_limit_per_hour: int,
     robots_mode: str,
     max_items_per_run: int,
+    source_weight: float,
 ) -> Dict[str, Any]:
     with engine.begin() as conn:
         existing = conn.execute(
@@ -671,6 +674,7 @@ def upsert_research_source(
                 "rate_limit_per_hour": rate_limit_per_hour,
                 "robots_mode": robots_mode,
                 "max_items_per_run": max_items_per_run,
+                "source_weight": source_weight,
             }
         )
         policy_stmt = policy_stmt.on_conflict_do_update(
@@ -680,6 +684,7 @@ def upsert_research_source(
                 "rate_limit_per_hour": policy_stmt.excluded.rate_limit_per_hour,
                 "robots_mode": policy_stmt.excluded.robots_mode,
                 "max_items_per_run": policy_stmt.excluded.max_items_per_run,
+                "source_weight": policy_stmt.excluded.source_weight,
                 "updated_at": text("now()"),
             },
         )
@@ -702,6 +707,7 @@ def list_research_sources(
             research_source_policies.c.rate_limit_per_hour,
             research_source_policies.c.robots_mode,
             research_source_policies.c.max_items_per_run,
+            research_source_policies.c.source_weight,
             research_source_policies.c.last_polled_at,
         )
         .join(
@@ -1244,6 +1250,7 @@ def search_research_chunks(
             d.title,
             d.canonical_url,
             d.published_at,
+            p.source_weight,
             c.chunk_id,
             c.ordinal,
             c.content,
@@ -1262,6 +1269,8 @@ def search_research_chunks(
           ON d.document_id = c.document_id
         JOIN research_sources s
           ON s.source_id = d.source_id
+        JOIN research_source_policies p
+          ON p.source_id = d.source_id
         WHERE s.topic_key = :topic_key
           AND d.status IN ('embedded', 'extracted')
           AND to_tsvector('english', coalesce(c.content, '') || ' ' || coalesce(d.title, ''))
@@ -1369,6 +1378,94 @@ def create_research_query_log(
     return str(query_log_id)
 
 
+def list_research_embeddings_for_documents(
+    engine: Engine,
+    *,
+    document_ids: List[str],
+    embedding_model_id: str,
+) -> List[Dict[str, Any]]:
+    if not document_ids:
+        return []
+    stmt = (
+        select(research_embeddings)
+        .where(research_embeddings.c.document_id.in_(document_ids))
+        .where(research_embeddings.c.embedding_model_id == embedding_model_id)
+    )
+    with engine.begin() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def insert_research_relevance_scores(
+    engine: Engine,
+    *,
+    trace_id: str,
+    topic_key: str,
+    query_text: str,
+    items: List[Dict[str, Any]],
+) -> int:
+    rows: List[Dict[str, Any]] = []
+    for item in items:
+        document_id = str(item.get("document_id") or "")
+        chunk_id = str(item.get("chunk_id") or "")
+        if not document_id or not chunk_id:
+            continue
+        rows.append(
+            {
+                "score_id": uuid.uuid4(),
+                "trace_id": trace_id,
+                "topic_key": topic_key,
+                "query_text": query_text[:500],
+                "document_id": document_id,
+                "chunk_id": chunk_id,
+                "score_total": float(item.get("score_total") or 0.0),
+                "score_lexical": float(item.get("score_lexical") or 0.0),
+                "score_embedding": float(item.get("score_embedding") or 0.0),
+                "score_recency": float(item.get("score_recency") or 0.0),
+                "score_source_weight": float(item.get("score_source_weight") or 0.0),
+            }
+        )
+    if not rows:
+        return 0
+    with engine.begin() as conn:
+        conn.execute(research_relevance_scores.insert(), rows)
+    return len(rows)
+
+
+def insert_research_retrieval_feedback(
+    engine: Engine,
+    *,
+    trace_id: str,
+    query_log_id: Optional[str],
+    document_id: str,
+    chunk_id: str,
+    verdict: str,
+    notes: Optional[str] = None,
+) -> str:
+    feedback_id = uuid.uuid4()
+    query_log_uuid = None
+    if query_log_id:
+        try:
+            query_log_uuid = uuid.UUID(query_log_id)
+        except ValueError:
+            query_log_uuid = None
+    with engine.begin() as conn:
+        conn.execute(
+            research_retrieval_feedback.insert().values(
+                {
+                    "feedback_id": feedback_id,
+                    "trace_id": trace_id,
+                    "query_log_id": query_log_uuid,
+                    "document_id": document_id,
+                    "chunk_id": chunk_id,
+                    "verdict": verdict,
+                    "notes": notes[:2000] if notes else None,
+                }
+            )
+        )
+    return str(feedback_id)
+
+
 def count_research_query_logs(
     engine: Engine,
     *,
@@ -1382,3 +1479,65 @@ def count_research_query_logs(
     with engine.begin() as conn:
         row = conn.execute(text(sql), {"topic_key": topic_key}).mappings().first()
     return int(row["c"]) if row else 0
+
+
+def count_research_feedback(
+    engine: Engine,
+    *,
+    trace_id: str,
+) -> int:
+    sql = """
+        SELECT count(*) AS c
+        FROM research_retrieval_feedback
+        WHERE trace_id = :trace_id
+    """
+    with engine.begin() as conn:
+        row = conn.execute(text(sql), {"trace_id": trace_id}).mappings().first()
+    return int(row["c"]) if row else 0
+
+
+def get_research_ops_summary(
+    engine: Engine,
+    *,
+    topic_key: str,
+) -> Dict[str, Any]:
+    sql = """
+        WITH source_stats AS (
+            SELECT
+                count(*) AS sources_total,
+                count(*) FILTER (WHERE enabled = true) AS sources_enabled
+            FROM research_sources
+            WHERE topic_key = :topic_key
+        ),
+        doc_stats AS (
+            SELECT
+                count(*) AS documents_total,
+                count(*) FILTER (WHERE d.status = 'embedded') AS documents_embedded,
+                count(*) FILTER (WHERE d.status = 'failed') AS documents_failed
+            FROM research_documents d
+            JOIN research_sources s ON s.source_id = d.source_id
+            WHERE s.topic_key = :topic_key
+        ),
+        run_stats AS (
+            SELECT
+                count(*) FILTER (WHERE status IN ('queued', 'running')) AS runs_open,
+                count(*) FILTER (WHERE status = 'failed' AND created_at >= now() - interval '24 hours') AS runs_failed_24h
+            FROM research_ingestion_runs
+            WHERE topic_key = :topic_key
+        ),
+        query_stats AS (
+            SELECT
+                count(*) FILTER (WHERE created_at >= now() - interval '24 hours') AS retrieval_queries_24h,
+                count(*) FILTER (
+                    WHERE status = 'error'
+                      AND created_at >= now() - interval '24 hours'
+                ) AS retrieval_errors_24h
+            FROM research_query_logs
+            WHERE topic_key = :topic_key
+        )
+        SELECT *
+        FROM source_stats, doc_stats, run_stats, query_stats
+    """
+    with engine.begin() as conn:
+        row = conn.execute(text(sql), {"topic_key": topic_key}).mappings().first()
+    return dict(row) if row else {}

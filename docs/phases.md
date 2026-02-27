@@ -158,7 +158,7 @@ Rollback:
 Definition of done:
 - Retrieval returns bounded results with stable provenance pointers and trace IDs.
 
-### Phase 5 — Relevance scoring + feedback loop + observability
+### Phase 5 — Relevance scoring + feedback loop + observability (implemented)
 Scope:
 - Baseline explainable scoring and operator feedback capture.
 - Improve operational metrics for ingestion and retrieval quality.

@@ -12,6 +12,8 @@ from sqlalchemy import text
 
 from app.config import Settings, settings as default_settings
 from app.research.contracts import (
+    ResearchFeedbackRequest,
+    ResearchFeedbackResponse,
     ResearchChunkSearchRequest,
     ResearchChunkSearchResponse,
     ResearchContextPackRequest,
@@ -24,6 +26,7 @@ from app.research.contracts import (
     ResearchIngestRunResponse,
     ResearchIngestRunStatusResponse,
     ResearchRunCounters,
+    ResearchOpsSummaryResponse,
     ResearchScoreBreakdown,
     ResearchSignal,
     ResearchSourceListResponse,
@@ -31,6 +34,8 @@ from app.research.contracts import (
     ResearchSourceUpsertRequest,
     ResearchSourceUpsertResponse,
 )
+from app.research.embeddings import embed_texts
+from app.research.scoring import blend_score, cosine_similarity, embedding_score, lexical_score, recency_score, source_weight_score
 from app.research.ids import compute_source_id
 from app.models import (
     ChunkSearchRequest,
@@ -73,6 +78,10 @@ from app.storage.db import (
     search_intel_articles,
     search_intel_sections,
     list_research_sources,
+    list_research_embeddings_for_documents,
+    insert_research_relevance_scores,
+    insert_research_retrieval_feedback,
+    get_research_ops_summary,
     search_research_chunks,
     search_research_document_chunks,
     search_projects,
@@ -660,6 +669,7 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
             rate_limit_per_hour=payload.rate_limit_per_hour,
             robots_mode=payload.robots_mode,
             max_items_per_run=max_items_per_run,
+            source_weight=float(payload.source_weight),
         )
         return ResearchSourceUpsertResponse(**result)
 
@@ -688,6 +698,7 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                     tags=row.get("tags") or [],
                     poll_interval_minutes=int(row.get("poll_interval_minutes") or 60),
                     rate_limit_per_hour=int(row.get("rate_limit_per_hour") or 30),
+                    source_weight=float(row.get("source_weight") or 1.0),
                     robots_mode=row.get("robots_mode") or "strict",
                     max_items_per_run=int(row.get("max_items_per_run") or 50),
                 )
@@ -771,6 +782,8 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
         start_time = time.perf_counter()
         max_items = max(payload.max_items or DEFAULT_RESEARCH_MAX_ITEMS, 1)
         topic_key = payload.topic_key.strip().lower()
+        embedding_model_id = os.getenv("RESEARCH_EMBEDDING_MODEL", "hash-64")
+        query_vector: List[float] = []
         try:
             rows = search_research_chunks(
                 app.state.engine,
@@ -778,21 +791,71 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                 query=payload.query,
                 source_ids=payload.source_ids or None,
                 recency_days=payload.recency_days,
-                limit=max_items * 8,
+                limit=max_items * 15,
+            )
+            try:
+                vectors = embed_texts(
+                    texts=[payload.query],
+                    model=embedding_model_id,
+                    api_key=os.getenv("OPENAI_API_KEY", ""),
+                )
+                if vectors:
+                    query_vector = vectors[0]
+            except Exception:
+                query_vector = []
+
+            doc_ids = sorted({str(row.get("document_id") or "") for row in rows if row.get("document_id")})
+            embedding_rows = list_research_embeddings_for_documents(
+                app.state.engine,
+                document_ids=doc_ids,
+                embedding_model_id=embedding_model_id,
+            )
+            embedding_map = {
+                (str(row.get("document_id")), str(row.get("chunk_id"))): row.get("vector") or []
+                for row in embedding_rows
+            }
+            ranked: List[Dict[str, Any]] = []
+            for row in rows:
+                document_id = str(row.get("document_id") or "")
+                chunk_id = str(row.get("chunk_id") or "")
+                if not document_id or not chunk_id:
+                    continue
+                chunk_vector = embedding_map.get((document_id, chunk_id)) or []
+                lexical_value = lexical_score(float(row.get("lexical_score") or 0.0))
+                cosine = cosine_similarity(query_vector, chunk_vector) if query_vector and chunk_vector else 0.0
+                embedding_value = embedding_score(cosine)
+                recency_value = recency_score(row.get("published_at"))
+                source_weight_value = source_weight_score(float(row.get("source_weight") or 1.0))
+                score = blend_score(
+                    lexical=lexical_value,
+                    embedding=embedding_value,
+                    recency=recency_value,
+                    source_weight=source_weight_value,
+                )
+                merged = dict(row)
+                merged["_score"] = score
+                ranked.append(merged)
+            ranked.sort(
+                key=lambda row: (
+                    float((row.get("_score") or {}).get("total") or 0.0),
+                    float((row.get("_score") or {}).get("lexical") or 0.0),
+                ),
+                reverse=True,
             )
             candidate_count = len(rows)
             items: List[ResearchContextPackItem] = []
             seen_docs = set()
             returned_chunk_ids: List[str] = []
-            top_score = float(rows[0].get("lexical_score") or 0.0) if rows else 0.0
+            top_score = float((ranked[0].get("_score") or {}).get("total") or 0.0) if ranked else 0.0
 
-            for row in rows:
+            for row in ranked:
                 document_id = str(row.get("document_id") or "")
                 chunk_id = str(row.get("chunk_id") or "")
                 if not document_id or not chunk_id or document_id in seen_docs:
                     continue
-                lexical_score = float(row.get("lexical_score") or 0.0)
-                if payload.min_relevance_score is not None and lexical_score < payload.min_relevance_score:
+                score = row.get("_score") or {}
+                total_score = float(score.get("total") or 0.0)
+                if payload.min_relevance_score is not None and total_score < payload.min_relevance_score:
                     continue
                 snippet = _clean_snippet(str(row.get("snippet") or row.get("content") or ""))
                 if not snippet:
@@ -809,12 +872,18 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                         signals=[
                             ResearchSignal(
                                 claim=_trim_text(snippet, 240),
-                                why="Matched lexical query terms in research chunk content.",
+                                why="Hybrid relevance from lexical, embedding, recency, and source weighting.",
                                 cite=citation,
                             )
                         ],
                         citations=[citation],
-                        score_breakdown=ResearchScoreBreakdown(total=lexical_score, lexical=lexical_score),
+                        score_breakdown=ResearchScoreBreakdown(
+                            total=total_score,
+                            lexical=float(score.get("lexical") or 0.0),
+                            embedding=float(score.get("embedding") or 0.0),
+                            recency=float(score.get("recency") or 0.0),
+                            source_weight=float(score.get("source_weight") or 0.0),
+                        ),
                     )
                 )
                 seen_docs.add(document_id)
@@ -822,6 +891,24 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                 if len(items) >= max_items:
                     break
 
+            insert_research_relevance_scores(
+                app.state.engine,
+                trace_id=trace_id,
+                topic_key=topic_key,
+                query_text=payload.query,
+                items=[
+                    {
+                        "document_id": str(row.get("document_id") or ""),
+                        "chunk_id": str(row.get("chunk_id") or ""),
+                        "score_total": float((row.get("_score") or {}).get("total") or 0.0),
+                        "score_lexical": float((row.get("_score") or {}).get("lexical") or 0.0),
+                        "score_embedding": float((row.get("_score") or {}).get("embedding") or 0.0),
+                        "score_recency": float((row.get("_score") or {}).get("recency") or 0.0),
+                        "score_source_weight": float((row.get("_score") or {}).get("source_weight") or 0.0),
+                    }
+                    for row in ranked[: max_items * 5]
+                ],
+            )
             retrieved_document_ids = [item.document_id for item in items]
             cited_signals = len(items[0].signals) if items else 0
             confidence = _determine_confidence(top_score, cited_signals)
@@ -905,6 +992,48 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                 }
             )
         return ResearchChunkSearchResponse(document_id=document_id, chunks=chunks)
+
+    @app.post("/v2/research/retrieval/feedback", response_model=ResearchFeedbackResponse)
+    def research_feedback_endpoint(
+        payload: ResearchFeedbackRequest,
+        _: None = Depends(require_bearer),
+    ) -> ResearchFeedbackResponse:
+        doc = get_research_document(app.state.engine, document_id=payload.document_id)
+        if not doc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+        feedback_id = insert_research_retrieval_feedback(
+            app.state.engine,
+            trace_id=payload.trace_id,
+            query_log_id=payload.query_log_id,
+            document_id=payload.document_id,
+            chunk_id=payload.chunk_id,
+            verdict=payload.verdict,
+            notes=payload.notes,
+        )
+        return ResearchFeedbackResponse(feedback_id=feedback_id, status="recorded")
+
+    @app.get("/v2/research/ops/summary", response_model=ResearchOpsSummaryResponse)
+    def research_ops_summary_endpoint(
+        topic_key: str,
+        _: None = Depends(require_bearer),
+    ) -> ResearchOpsSummaryResponse:
+        normalized_topic = topic_key.strip().lower()
+        summary = get_research_ops_summary(
+            app.state.engine,
+            topic_key=normalized_topic,
+        )
+        return ResearchOpsSummaryResponse(
+            topic_key=normalized_topic,
+            sources_total=int(summary.get("sources_total") or 0),
+            sources_enabled=int(summary.get("sources_enabled") or 0),
+            documents_total=int(summary.get("documents_total") or 0),
+            documents_embedded=int(summary.get("documents_embedded") or 0),
+            documents_failed=int(summary.get("documents_failed") or 0),
+            runs_open=int(summary.get("runs_open") or 0),
+            runs_failed_24h=int(summary.get("runs_failed_24h") or 0),
+            retrieval_queries_24h=int(summary.get("retrieval_queries_24h") or 0),
+            retrieval_errors_24h=int(summary.get("retrieval_errors_24h") or 0),
+        )
 
     return app
 

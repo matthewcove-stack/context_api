@@ -13,6 +13,7 @@ class ResearchSourceUpsertRequest(BaseModel):
     base_url: str
     poll_interval_minutes: int = Field(default=60, ge=1, le=1440)
     rate_limit_per_hour: int = Field(default=30, ge=1, le=3600)
+    source_weight: float = Field(default=1.0, ge=0.0, le=5.0)
     robots_mode: Literal["strict", "ignore"] = "strict"
     enabled: bool = True
     tags: List[str] = Field(default_factory=list)
@@ -34,6 +35,7 @@ class ResearchSourceRecord(BaseModel):
     tags: List[str] = Field(default_factory=list)
     poll_interval_minutes: int
     rate_limit_per_hour: int
+    source_weight: float = 1.0
     robots_mode: Literal["strict", "ignore"]
     max_items_per_run: int
 
@@ -103,6 +105,9 @@ class ResearchCitation(BaseModel):
 class ResearchScoreBreakdown(BaseModel):
     total: float
     lexical: float
+    embedding: float = 0.0
+    recency: float = 0.0
+    source_weight: float = 0.0
 
 
 class ResearchSignal(BaseModel):
@@ -155,3 +160,30 @@ class ResearchChunkRecord(BaseModel):
 class ResearchChunkSearchResponse(BaseModel):
     document_id: str
     chunks: List[ResearchChunkRecord] = Field(default_factory=list)
+
+
+class ResearchFeedbackRequest(BaseModel):
+    trace_id: str
+    query_log_id: Optional[str] = None
+    document_id: str
+    chunk_id: str
+    verdict: Literal["useful", "not_useful"]
+    notes: Optional[str] = None
+
+
+class ResearchFeedbackResponse(BaseModel):
+    feedback_id: str
+    status: Literal["recorded"]
+
+
+class ResearchOpsSummaryResponse(BaseModel):
+    topic_key: str
+    sources_total: int = 0
+    sources_enabled: int = 0
+    documents_total: int = 0
+    documents_embedded: int = 0
+    documents_failed: int = 0
+    runs_open: int = 0
+    runs_failed_24h: int = 0
+    retrieval_queries_24h: int = 0
+    retrieval_errors_24h: int = 0

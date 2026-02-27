@@ -1,6 +1,6 @@
 # /v2 research retrieval — Contract
 
-Status: implemented baseline in Phase 4 (lexical retrieval + query logs).
+Status: implemented in Phase 5 (hybrid scoring + feedback + ops summary).
 
 ## Endpoint: `POST /v2/research/context/pack`
 
@@ -23,7 +23,7 @@ Response:
   - `summary`
   - `signals[]`
   - `citations[]` (`document_id`, `chunk_id`, `section_id`)
-  - `score_breakdown` (`total`, `lexical`)
+  - `score_breakdown` (`total`, `lexical`, `embedding`, `recency`, `source_weight`)
 - `retrieval_confidence` (`high` | `med` | `low`)
 - `next_action` (`proceed` | `refine_query` | `expand_sections`)
 - `trace`:
@@ -56,3 +56,25 @@ Response:
 
 Implemented table:
 - `research_query_logs`
+
+## Endpoint: `POST /v2/research/retrieval/feedback`
+
+Request:
+- `trace_id` (string, required)
+- `query_log_id` (string, optional)
+- `document_id` (string, required)
+- `chunk_id` (string, required)
+- `verdict` (`useful` | `not_useful`, required)
+- `notes` (string, optional)
+
+Response:
+- `feedback_id`
+- `status` (`recorded`)
+
+## Endpoint: `GET /v2/research/ops/summary?topic_key=...`
+
+Response includes:
+- source counts
+- document status counts
+- open/failed run counters
+- retrieval query/error counters (24h)

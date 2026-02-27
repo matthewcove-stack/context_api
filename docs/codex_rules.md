@@ -25,7 +25,12 @@
 ## Retrieval constraints
 - Keep retrieval outputs compact and bounded by explicit limits.
 - Prefer citation-first responses over long text dumps.
-- If hybrid retrieval is introduced, keep lexical fallback deterministic and documented.
+- Hybrid retrieval uses explainable, bounded factors only:
+  - lexical
+  - embedding
+  - recency
+  - source weight
+- Score breakdown and retrieval feedback must be persisted for auditability.
 
 ## Testing expectations
 - Unit tests must cover ID determinism and dedupe logic.

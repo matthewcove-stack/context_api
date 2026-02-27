@@ -51,6 +51,10 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 - `POST /v2/research/context/pack`
 - `POST /v2/research/documents/{document_id}/chunks:search`
 
+## Research Phase 5 scoring + ops
+- `POST /v2/research/retrieval/feedback`
+- `GET /v2/research/ops/summary?topic_key=<topic>`
+
 ## Worker
 - `docker compose run --rm api python -m app.intel.worker --once`
 - `docker compose run --rm api python -m app.research.worker --once`
