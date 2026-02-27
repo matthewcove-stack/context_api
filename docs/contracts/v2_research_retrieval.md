@@ -1,6 +1,6 @@
-# /v2 research retrieval — Contract stub (Phase 4+ target)
+# /v2 research retrieval — Contract
 
-Status: draft retrieval contract for upcoming phases.
+Status: implemented baseline in Phase 4 (lexical retrieval + query logs).
 
 ## Endpoint: `POST /v2/research/context/pack`
 
@@ -23,7 +23,7 @@ Response:
   - `summary`
   - `signals[]`
   - `citations[]` (`document_id`, `chunk_id`, `section_id`)
-  - `score_breakdown` (bounded explainability payload)
+  - `score_breakdown` (`total`, `lexical`)
 - `retrieval_confidence` (`high` | `med` | `low`)
 - `next_action` (`proceed` | `refine_query` | `expand_sections`)
 - `trace`:
@@ -53,3 +53,6 @@ Response:
   - candidate set size
   - returned item IDs
   - latency + error status
+
+Implemented table:
+- `research_query_logs`

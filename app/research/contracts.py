@@ -83,3 +83,75 @@ class ResearchDocumentRecord(BaseModel):
     fetch_meta: Dict[str, Any] = Field(default_factory=dict)
     extraction_meta: Dict[str, Any] = Field(default_factory=dict)
     enrichment_meta: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ResearchContextPackRequest(BaseModel):
+    query: str
+    topic_key: str
+    source_ids: List[str] = Field(default_factory=list)
+    token_budget: Optional[int] = None
+    recency_days: Optional[int] = Field(default=None, ge=0)
+    max_items: Optional[int] = Field(default=None, ge=1, le=20)
+    min_relevance_score: Optional[float] = None
+
+
+class ResearchCitation(BaseModel):
+    document_id: str
+    chunk_id: str
+
+
+class ResearchScoreBreakdown(BaseModel):
+    total: float
+    lexical: float
+
+
+class ResearchSignal(BaseModel):
+    claim: str
+    why: str
+    cite: ResearchCitation
+
+
+class ResearchContextPackItem(BaseModel):
+    document_id: str
+    source_id: str
+    title: str
+    canonical_url: str
+    published_at: Optional[datetime] = None
+    summary: str
+    signals: List[ResearchSignal] = Field(default_factory=list)
+    citations: List[ResearchCitation] = Field(default_factory=list)
+    score_breakdown: ResearchScoreBreakdown
+
+
+class ResearchContextPack(BaseModel):
+    items: List[ResearchContextPackItem] = Field(default_factory=list)
+
+
+class ResearchContextPackTrace(BaseModel):
+    trace_id: str
+    retrieved_document_ids: List[str] = Field(default_factory=list)
+    timing_ms: Dict[str, int] = Field(default_factory=dict)
+
+
+class ResearchContextPackResponse(BaseModel):
+    pack: ResearchContextPack
+    retrieval_confidence: Literal["high", "med", "low"]
+    next_action: Literal["proceed", "refine_query", "expand_sections"]
+    trace: ResearchContextPackTrace
+
+
+class ResearchChunkSearchRequest(BaseModel):
+    query: str
+    max_chars: Optional[int] = None
+    max_chunks: Optional[int] = None
+
+
+class ResearchChunkRecord(BaseModel):
+    chunk_id: str
+    snippet: str
+    score: Optional[float] = None
+
+
+class ResearchChunkSearchResponse(BaseModel):
+    document_id: str
+    chunks: List[ResearchChunkRecord] = Field(default_factory=list)

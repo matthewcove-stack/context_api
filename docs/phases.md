@@ -133,7 +133,7 @@ Definition of done:
 - Chunk IDs are stable across re-runs.
 - Embeddings stored with `embedding_model_id` and provenance.
 
-### Phase 4 — Context API retrieval endpoints + query logging
+### Phase 4 — Context API retrieval endpoints + query logging (implemented)
 Scope:
 - Expose `/v2/research/*` retrieval endpoints and query audit logs.
 - Keep `/v2/context/pack` compatibility while enabling research-backed retrieval.

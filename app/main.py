@@ -12,10 +12,20 @@ from sqlalchemy import text
 
 from app.config import Settings, settings as default_settings
 from app.research.contracts import (
+    ResearchChunkSearchRequest,
+    ResearchChunkSearchResponse,
+    ResearchContextPackRequest,
+    ResearchContextPackResponse,
+    ResearchContextPackTrace,
+    ResearchContextPack,
+    ResearchContextPackItem,
+    ResearchCitation,
     ResearchIngestRunRequest,
     ResearchIngestRunResponse,
     ResearchIngestRunStatusResponse,
     ResearchRunCounters,
+    ResearchScoreBreakdown,
+    ResearchSignal,
     ResearchSourceListResponse,
     ResearchSourceRecord,
     ResearchSourceUpsertRequest,
@@ -51,6 +61,7 @@ from app.storage.db import (
     compute_article_id,
     create_intel_ingest_job,
     create_db_engine,
+    create_research_query_log,
     get_research_ingestion_run,
     get_research_ingestion_run_by_idempotency,
     get_project,
@@ -62,9 +73,12 @@ from app.storage.db import (
     search_intel_articles,
     search_intel_sections,
     list_research_sources,
+    search_research_chunks,
+    search_research_document_chunks,
     search_projects,
     search_tasks,
     upsert_research_source,
+    get_research_document,
     upsert_intel_article_seed,
     upsert_projects,
     upsert_tasks,
@@ -81,6 +95,10 @@ DEFAULT_MAX_SECTION_IDS = 8
 DEFAULT_MAX_CHUNKS = 3
 MAX_MAX_CHUNKS = 10
 DEFAULT_MAX_CHARS = 600
+DEFAULT_RESEARCH_MAX_ITEMS = 3
+DEFAULT_RESEARCH_MAX_CHUNKS = 3
+MAX_RESEARCH_MAX_CHUNKS = 10
+DEFAULT_RESEARCH_MAX_CHARS = 600
 
 
 def _trim_text(text: str, max_chars: int) -> str:
@@ -193,6 +211,10 @@ def _determine_next_action(confidence: str, query: str) -> str:
     if confidence == "med" and _query_mentions_detail(query):
         return "expand_sections"
     return "proceed"
+
+
+def _clean_snippet(snippet: str) -> str:
+    return snippet.replace("<b>", "").replace("</b>", "").strip()
 
 
 def create_app(app_settings: Settings | None = None) -> FastAPI:
@@ -739,6 +761,150 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
             ),
             errors=[str(item) for item in (run.get("errors") or [])],
         )
+
+    @app.post("/v2/research/context/pack", response_model=ResearchContextPackResponse)
+    def research_context_pack_endpoint(
+        payload: ResearchContextPackRequest,
+        _: None = Depends(require_bearer),
+    ) -> ResearchContextPackResponse:
+        trace_id = str(uuid.uuid4())
+        start_time = time.perf_counter()
+        max_items = max(payload.max_items or DEFAULT_RESEARCH_MAX_ITEMS, 1)
+        topic_key = payload.topic_key.strip().lower()
+        try:
+            rows = search_research_chunks(
+                app.state.engine,
+                topic_key=topic_key,
+                query=payload.query,
+                source_ids=payload.source_ids or None,
+                recency_days=payload.recency_days,
+                limit=max_items * 8,
+            )
+            candidate_count = len(rows)
+            items: List[ResearchContextPackItem] = []
+            seen_docs = set()
+            returned_chunk_ids: List[str] = []
+            top_score = float(rows[0].get("lexical_score") or 0.0) if rows else 0.0
+
+            for row in rows:
+                document_id = str(row.get("document_id") or "")
+                chunk_id = str(row.get("chunk_id") or "")
+                if not document_id or not chunk_id or document_id in seen_docs:
+                    continue
+                lexical_score = float(row.get("lexical_score") or 0.0)
+                if payload.min_relevance_score is not None and lexical_score < payload.min_relevance_score:
+                    continue
+                snippet = _clean_snippet(str(row.get("snippet") or row.get("content") or ""))
+                if not snippet:
+                    continue
+                citation = ResearchCitation(document_id=document_id, chunk_id=chunk_id)
+                items.append(
+                    ResearchContextPackItem(
+                        document_id=document_id,
+                        source_id=str(row.get("source_id") or ""),
+                        title=str(row.get("title") or ""),
+                        canonical_url=str(row.get("canonical_url") or ""),
+                        published_at=row.get("published_at"),
+                        summary=_trim_text(snippet, DEFAULT_RESEARCH_MAX_CHARS),
+                        signals=[
+                            ResearchSignal(
+                                claim=_trim_text(snippet, 240),
+                                why="Matched lexical query terms in research chunk content.",
+                                cite=citation,
+                            )
+                        ],
+                        citations=[citation],
+                        score_breakdown=ResearchScoreBreakdown(total=lexical_score, lexical=lexical_score),
+                    )
+                )
+                seen_docs.add(document_id)
+                returned_chunk_ids.append(chunk_id)
+                if len(items) >= max_items:
+                    break
+
+            retrieved_document_ids = [item.document_id for item in items]
+            cited_signals = len(items[0].signals) if items else 0
+            confidence = _determine_confidence(top_score, cited_signals)
+            next_action = _determine_next_action(confidence, payload.query)
+            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+            create_research_query_log(
+                app.state.engine,
+                trace_id=trace_id,
+                topic_key=topic_key,
+                query_text=payload.query,
+                source_ids=payload.source_ids,
+                token_budget=payload.token_budget,
+                max_items=max_items,
+                recency_days=payload.recency_days,
+                min_relevance_score=payload.min_relevance_score,
+                candidate_count=candidate_count,
+                returned_document_ids=retrieved_document_ids,
+                returned_chunk_ids=returned_chunk_ids,
+                timing_ms=elapsed_ms,
+                status="ok",
+            )
+            return ResearchContextPackResponse(
+                pack=ResearchContextPack(items=items),
+                retrieval_confidence=confidence,
+                next_action=next_action,
+                trace=ResearchContextPackTrace(
+                    trace_id=trace_id,
+                    retrieved_document_ids=retrieved_document_ids,
+                    timing_ms={"total": elapsed_ms},
+                ),
+            )
+        except Exception as exc:
+            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+            create_research_query_log(
+                app.state.engine,
+                trace_id=trace_id,
+                topic_key=topic_key,
+                query_text=payload.query,
+                source_ids=payload.source_ids,
+                token_budget=payload.token_budget,
+                max_items=max_items,
+                recency_days=payload.recency_days,
+                min_relevance_score=payload.min_relevance_score,
+                candidate_count=0,
+                returned_document_ids=[],
+                returned_chunk_ids=[],
+                timing_ms=elapsed_ms,
+                status="error",
+                error=str(exc),
+            )
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Research retrieval failed")
+
+    @app.post(
+        "/v2/research/documents/{document_id}/chunks:search",
+        response_model=ResearchChunkSearchResponse,
+    )
+    def research_document_chunks_endpoint(
+        document_id: str,
+        payload: ResearchChunkSearchRequest,
+        _: None = Depends(require_bearer),
+    ) -> ResearchChunkSearchResponse:
+        doc = get_research_document(app.state.engine, document_id=document_id)
+        if not doc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+        max_chunks = min(max(payload.max_chunks or DEFAULT_RESEARCH_MAX_CHUNKS, 1), MAX_RESEARCH_MAX_CHUNKS)
+        max_chars = max(payload.max_chars or DEFAULT_RESEARCH_MAX_CHARS, 80)
+        rows = search_research_document_chunks(
+            app.state.engine,
+            document_id=document_id,
+            query=payload.query,
+            limit=max_chunks,
+        )
+        chunks = []
+        for row in rows:
+            snippet = _clean_snippet(str(row.get("snippet") or ""))
+            chunks.append(
+                {
+                    "chunk_id": str(row.get("chunk_id") or ""),
+                    "snippet": _trim_text(snippet, max_chars),
+                    "score": float(row.get("score")) if row.get("score") is not None else None,
+                }
+            )
+        return ResearchChunkSearchResponse(document_id=document_id, chunks=chunks)
 
     return app
 

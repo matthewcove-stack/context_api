@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.research.contracts import (
+    ResearchContextPackRequest,
     ResearchIngestRunRequest,
     ResearchSourceUpsertRequest,
 )
@@ -22,3 +23,9 @@ def test_research_ingest_request_contract_defaults() -> None:
     payload = ResearchIngestRunRequest(topic_key="ai_supply", trigger="manual")
     assert payload.source_ids == []
     assert payload.idempotency_key is None
+
+
+def test_research_context_pack_request_defaults() -> None:
+    payload = ResearchContextPackRequest(query="gpu supply", topic_key="ai_supply")
+    assert payload.source_ids == []
+    assert payload.max_items is None

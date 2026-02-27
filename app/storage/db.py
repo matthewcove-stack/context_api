@@ -18,6 +18,7 @@ from app.storage.schema import (
     research_chunks,
     research_embeddings,
     research_ingestion_runs,
+    research_query_logs,
     research_source_policies,
     research_sources,
     tasks,
@@ -1218,3 +1219,166 @@ def list_research_documents(
     with engine.begin() as conn:
         rows = conn.execute(stmt).mappings().all()
     return [dict(row) for row in rows]
+
+
+def search_research_chunks(
+    engine: Engine,
+    *,
+    topic_key: str,
+    query: str,
+    source_ids: Optional[List[str]] = None,
+    recency_days: Optional[int] = None,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    if not query.strip():
+        return []
+    params: Dict[str, Any] = {
+        "topic_key": topic_key,
+        "query": query,
+        "limit": max(limit, 1),
+    }
+    sql = """
+        SELECT
+            d.document_id,
+            d.source_id,
+            d.title,
+            d.canonical_url,
+            d.published_at,
+            c.chunk_id,
+            c.ordinal,
+            c.content,
+            ts_rank(
+                to_tsvector('english', coalesce(c.content, '') || ' ' || coalesce(d.title, '')),
+                plainto_tsquery('english', :query)
+            ) AS lexical_score,
+            ts_headline(
+                'english',
+                c.content,
+                plainto_tsquery('english', :query),
+                'MaxWords=35, MinWords=12, ShortWord=3'
+            ) AS snippet
+        FROM research_chunks c
+        JOIN research_documents d
+          ON d.document_id = c.document_id
+        JOIN research_sources s
+          ON s.source_id = d.source_id
+        WHERE s.topic_key = :topic_key
+          AND d.status IN ('embedded', 'extracted')
+          AND to_tsvector('english', coalesce(c.content, '') || ' ' || coalesce(d.title, ''))
+              @@ plainto_tsquery('english', :query)
+    """
+    if source_ids:
+        placeholders: List[str] = []
+        for idx, source_id in enumerate(source_ids):
+            key = f"source_id_{idx}"
+            placeholders.append(f":{key}")
+            params[key] = source_id
+        sql += f" AND d.source_id IN ({', '.join(placeholders)})"
+    if recency_days is not None:
+        sql += " AND coalesce(d.published_at, d.discovered_at) >= now() - (:recency_days * interval '1 day')"
+        params["recency_days"] = max(recency_days, 0)
+    sql += """
+        ORDER BY lexical_score DESC, coalesce(d.published_at, d.discovered_at) DESC NULLS LAST, c.ordinal ASC
+        LIMIT :limit
+    """
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), params).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def search_research_document_chunks(
+    engine: Engine,
+    *,
+    document_id: str,
+    query: str,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    if not query.strip():
+        return []
+    sql = """
+        SELECT
+            c.chunk_id,
+            c.ordinal,
+            ts_rank(
+                to_tsvector('english', coalesce(c.content, '')),
+                plainto_tsquery('english', :query)
+            ) AS score,
+            ts_headline(
+                'english',
+                c.content,
+                plainto_tsquery('english', :query),
+                'MaxWords=35, MinWords=12, ShortWord=3'
+            ) AS snippet
+        FROM research_chunks c
+        WHERE c.document_id = :document_id
+          AND to_tsvector('english', coalesce(c.content, '')) @@ plainto_tsquery('english', :query)
+        ORDER BY score DESC, c.ordinal ASC
+        LIMIT :limit
+    """
+    params = {
+        "document_id": document_id,
+        "query": query,
+        "limit": max(limit, 1),
+    }
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), params).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def create_research_query_log(
+    engine: Engine,
+    *,
+    trace_id: str,
+    topic_key: str,
+    query_text: str,
+    source_ids: List[str],
+    token_budget: Optional[int],
+    max_items: Optional[int],
+    recency_days: Optional[int],
+    min_relevance_score: Optional[float],
+    candidate_count: int,
+    returned_document_ids: List[str],
+    returned_chunk_ids: List[str],
+    timing_ms: int,
+    status: str = "ok",
+    error: Optional[str] = None,
+) -> str:
+    query_log_id = uuid.uuid4()
+    with engine.begin() as conn:
+        conn.execute(
+            research_query_logs.insert().values(
+                {
+                    "query_log_id": query_log_id,
+                    "trace_id": trace_id,
+                    "topic_key": topic_key,
+                    "query_text": query_text[:500],
+                    "source_ids": source_ids,
+                    "token_budget": token_budget,
+                    "max_items": max_items,
+                    "recency_days": recency_days,
+                    "min_relevance_score": min_relevance_score,
+                    "candidate_count": max(candidate_count, 0),
+                    "returned_document_ids": returned_document_ids,
+                    "returned_chunk_ids": returned_chunk_ids,
+                    "timing_ms": max(timing_ms, 0),
+                    "status": status,
+                    "error": error[:1000] if error else None,
+                }
+            )
+        )
+    return str(query_log_id)
+
+
+def count_research_query_logs(
+    engine: Engine,
+    *,
+    topic_key: str,
+) -> int:
+    sql = """
+        SELECT count(*) AS c
+        FROM research_query_logs
+        WHERE topic_key = :topic_key
+    """
+    with engine.begin() as conn:
+        row = conn.execute(text(sql), {"topic_key": topic_key}).mappings().first()
+    return int(row["c"]) if row else 0

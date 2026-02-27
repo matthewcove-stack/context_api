@@ -16,6 +16,10 @@
 - Phase 3 chunking + embeddings:
   - Worker generates deterministic chunks from extracted text.
   - Chunk embeddings are persisted with model provenance.
+- Phase 4 research retrieval:
+  - `POST /v2/research/context/pack` returns bounded, citation-first retrieval packs.
+  - `POST /v2/research/documents/{document_id}/chunks:search` supports progressive disclosure.
+  - Retrieval queries are audited in `research_query_logs`.
 - Dockerized test workflow (`docker compose run --rm api pytest`).
 
 ## Implemented in this phase
@@ -52,6 +56,10 @@
 - `POST /v2/research/ingest/run`
 - `GET /v2/research/ingest/runs/{run_id}`
 
+### New `/v2` research phase 4 retrieval
+- `POST /v2/research/context/pack`
+- `POST /v2/research/documents/{document_id}/chunks:search`
+
 ### Existing `/v1` sync/search
 - `POST /v1/projects/sync`
 - `POST /v1/tasks/sync`
@@ -71,6 +79,7 @@
   - includes `extracted_text` and `extracted_at` (Phase 2)
 - `research_chunks`
 - `research_embeddings`
+- `research_query_logs`
 
 ## Current worker model
 - Intel worker command:
@@ -79,8 +88,6 @@
   - `docker compose run --rm api python -m app.research.worker --once`
 
 ## Gaps against the research ingestion target
-- No dedicated `/v2/research/context/pack` retrieval endpoints yet (Phase 4+).
-- No retrieval query log table yet.
 - Governance controls are baseline only:
   - allowlist and per-source rate controls exist
   - robots strict mode exists

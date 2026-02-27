@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, MetaData, Table, Text, text
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, ForeignKeyConstraint, Index, Integer, MetaData, Table, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func
 
@@ -213,4 +213,27 @@ research_embeddings = Table(
         ondelete="CASCADE",
     ),
     Index("ix_research_embeddings_document_model", "document_id", "embedding_model_id"),
+)
+
+research_query_logs = Table(
+    "research_query_logs",
+    metadata,
+    Column("query_log_id", UUID(as_uuid=True), primary_key=True),
+    Column("trace_id", Text, nullable=False),
+    Column("topic_key", Text, nullable=False),
+    Column("query_text", Text, nullable=False),
+    Column("source_ids", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("token_budget", Integer, nullable=True),
+    Column("max_items", Integer, nullable=True),
+    Column("recency_days", Integer, nullable=True),
+    Column("min_relevance_score", Float, nullable=True),
+    Column("candidate_count", Integer, nullable=False, server_default=text("0")),
+    Column("returned_document_ids", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("returned_chunk_ids", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("timing_ms", Integer, nullable=False, server_default=text("0")),
+    Column("status", Text, nullable=False, server_default=text("'ok'")),
+    Column("error", Text, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Index("ix_research_query_logs_topic_created_at", "topic_key", "created_at"),
+    Index("ix_research_query_logs_trace_id", "trace_id", unique=True),
 )
