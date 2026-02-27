@@ -103,12 +103,12 @@ Rollback:
 Definition of done:
 - Extracted text is persisted with provenance (`extraction_method`, timestamps, warnings).
 
-### Phase 3 — Chunking + embedding + vector storage
+### Phase 3 — Chunking + embedding + vector storage (implemented)
 Scope:
 - Add deterministic chunk generation and embeddings for retrievable units.
 
 Edit map (planned):
-- `alembic/versions/0005_*_research_chunks_embeddings.py`
+- `alembic/versions/0006_*_research_chunks_embeddings.py`
 - `app/research/chunking.py`, `app/research/embeddings.py`
 - `app/storage/schema.py`, `app/storage/db.py`
 - `app/research/worker.py`

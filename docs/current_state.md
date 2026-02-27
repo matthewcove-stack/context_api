@@ -13,6 +13,9 @@
 - Phase 2 research extraction:
   - Worker extracts normalized text from fetched payloads.
   - Extraction provenance is persisted in `research_documents.extraction_meta`.
+- Phase 3 chunking + embeddings:
+  - Worker generates deterministic chunks from extracted text.
+  - Chunk embeddings are persisted with model provenance.
 - Dockerized test workflow (`docker compose run --rm api pytest`).
 
 ## Implemented in this phase
@@ -66,6 +69,8 @@
 - `research_ingestion_runs`
 - `research_documents`
   - includes `extracted_text` and `extracted_at` (Phase 2)
+- `research_chunks`
+- `research_embeddings`
 
 ## Current worker model
 - Intel worker command:
@@ -74,7 +79,6 @@
   - `docker compose run --rm api python -m app.research.worker --once`
 
 ## Gaps against the research ingestion target
-- No chunk/embedding/vector stage for research documents yet (Phase 3+).
 - No dedicated `/v2/research/context/pack` retrieval endpoints yet (Phase 4+).
 - No retrieval query log table yet.
 - Governance controls are baseline only:

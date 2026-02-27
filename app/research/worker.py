@@ -9,7 +9,9 @@ from typing import Any, Dict, List
 
 from app.intel.fetch import fetch_url
 from app.intel.extract import extract_readable_text
+from app.research.chunking import chunk_document
 from app.research.discovery import discover_candidate_items, extract_title_from_html, is_allowed_by_robots
+from app.research.embeddings import embed_texts
 from app.research.ids import compute_document_id
 from app.storage.db import (
     append_research_run_error,
@@ -19,10 +21,13 @@ from app.storage.db import (
     has_open_research_run_for_topic,
     list_due_research_sources,
     list_research_sources,
+    mark_research_document_embedded,
     mark_research_document_failed,
     mark_research_document_fetched,
     mark_research_document_extracted,
     mark_research_ingestion_run_finished,
+    replace_research_chunks,
+    replace_research_embeddings,
     set_research_source_polled,
     update_research_run_counters,
     upsert_research_document_seed,
@@ -87,6 +92,9 @@ def _process_source(
     max_items_default = _int_env("RESEARCH_MAX_ITEMS_PER_SOURCE", 50)
     max_items = int(source.get("max_items_per_run") or max_items_default)
     rate_limit_per_hour = int(source.get("rate_limit_per_hour") or 30)
+    chunk_max_chars = _int_env("RESEARCH_CHUNK_MAX_CHARS", 1200)
+    embedding_model_id = os.getenv("RESEARCH_EMBEDDING_MODEL", "hash-64")
+    embedding_api_key = os.getenv("OPENAI_API_KEY", "")
 
     counters = {"seen": 0, "new": 0, "deduped": 0, "failed": 0}
     source_fetch = _fetch_with_retries(base_url)
@@ -212,6 +220,88 @@ def _process_source(
                 "warnings": extraction.get("warnings") or [],
             },
             published_at=extraction.get("published_at"),
+        )
+        chunks = chunk_document(
+            document_id=document_id,
+            text=extracted_text,
+            max_chars=max(chunk_max_chars, 200),
+        )
+        if not chunks:
+            counters["failed"] += 1
+            mark_research_document_failed(
+                engine,
+                document_id=document_id,
+                fetch_meta={
+                    "http_status": item_status,
+                    "content_type": (item_fetch.get("headers") or {}).get("content-type"),
+                    "error": "empty chunk set",
+                },
+            )
+            append_research_run_error(
+                engine,
+                run_id=run_id,
+                message=f"chunking_failed source_id={source_id} url={item_url}",
+            )
+            continue
+        try:
+            vectors = embed_texts(
+                texts=[str(chunk["content"]) for chunk in chunks],
+                model=embedding_model_id,
+                api_key=embedding_api_key,
+            )
+        except Exception as exc:
+            counters["failed"] += 1
+            mark_research_document_failed(
+                engine,
+                document_id=document_id,
+                fetch_meta={
+                    "http_status": item_status,
+                    "content_type": (item_fetch.get("headers") or {}).get("content-type"),
+                    "error": f"embedding_error: {exc}",
+                },
+            )
+            append_research_run_error(
+                engine,
+                run_id=run_id,
+                message=f"embedding_failed source_id={source_id} url={item_url} error={exc}",
+            )
+            continue
+        if len(vectors) != len(chunks):
+            counters["failed"] += 1
+            mark_research_document_failed(
+                engine,
+                document_id=document_id,
+                fetch_meta={
+                    "http_status": item_status,
+                    "content_type": (item_fetch.get("headers") or {}).get("content-type"),
+                    "error": "embedding vector count mismatch",
+                },
+            )
+            append_research_run_error(
+                engine,
+                run_id=run_id,
+                message=f"embedding_mismatch source_id={source_id} url={item_url}",
+            )
+            continue
+
+        replace_research_chunks(
+            engine,
+            document_id=document_id,
+            chunks=chunks,
+        )
+        replace_research_embeddings(
+            engine,
+            document_id=document_id,
+            embedding_model_id=embedding_model_id,
+            embeddings=[
+                {"chunk_id": str(chunk["chunk_id"]), "vector": vector}
+                for chunk, vector in zip(chunks, vectors)
+            ],
+        )
+        mark_research_document_embedded(
+            engine,
+            document_id=document_id,
+            embedding_model_id=embedding_model_id,
         )
 
     set_research_source_polled(engine, source_id=source_id)

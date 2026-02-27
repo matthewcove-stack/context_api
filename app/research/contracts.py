@@ -79,7 +79,7 @@ class ResearchDocumentRecord(BaseModel):
     url_original: Optional[str] = None
     title: Optional[str] = None
     published_at: Optional[datetime] = None
-    status: Literal["discovered", "fetched", "extracted", "enriched", "failed"] = "discovered"
+    status: Literal["discovered", "fetched", "extracted", "embedded", "enriched", "failed"] = "discovered"
     fetch_meta: Dict[str, Any] = Field(default_factory=dict)
     extraction_meta: Dict[str, Any] = Field(default_factory=dict)
     enrichment_meta: Dict[str, Any] = Field(default_factory=dict)

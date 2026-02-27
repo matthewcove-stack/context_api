@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, MetaData, Table, Text, text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, ForeignKeyConstraint, Index, Integer, MetaData, Table, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func
 
@@ -177,8 +177,40 @@ research_documents = Table(
     Column("discovered_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("fetched_at", DateTime(timezone=True), nullable=True),
     Column("extracted_at", DateTime(timezone=True), nullable=True),
+    Column("embedding_model_id", Text, nullable=True),
+    Column("embedded_at", DateTime(timezone=True), nullable=True),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Index("ix_research_documents_source_id", "source_id"),
     Index("ix_research_documents_status", "status"),
     Index("ix_research_documents_canonical_url", "canonical_url"),
+)
+
+research_chunks = Table(
+    "research_chunks",
+    metadata,
+    Column("document_id", Text, ForeignKey("research_documents.document_id", ondelete="CASCADE"), primary_key=True),
+    Column("chunk_id", Text, primary_key=True),
+    Column("ordinal", Integer, nullable=False),
+    Column("content", Text, nullable=False),
+    Column("content_hash", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Index("ix_research_chunks_document_id", "document_id"),
+    Index("ix_research_chunks_ordinal", "ordinal"),
+)
+
+research_embeddings = Table(
+    "research_embeddings",
+    metadata,
+    Column("document_id", Text, nullable=False, primary_key=True),
+    Column("chunk_id", Text, nullable=False, primary_key=True),
+    Column("embedding_model_id", Text, nullable=False, primary_key=True),
+    Column("vector", JSONB, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    ForeignKeyConstraint(
+        ["document_id", "chunk_id"],
+        ["research_chunks.document_id", "research_chunks.chunk_id"],
+        ondelete="CASCADE",
+    ),
+    Index("ix_research_embeddings_document_model", "document_id", "embedding_model_id"),
 )

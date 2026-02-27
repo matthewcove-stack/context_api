@@ -15,6 +15,8 @@ from app.storage.schema import (
     intel_ingest_jobs,
     projects,
     research_documents,
+    research_chunks,
+    research_embeddings,
     research_ingestion_runs,
     research_source_policies,
     research_sources,
@@ -996,6 +998,86 @@ def mark_research_document_extracted(
         )
 
 
+def replace_research_chunks(
+    engine: Engine,
+    *,
+    document_id: str,
+    chunks: List[Dict[str, Any]],
+) -> None:
+    rows: List[Dict[str, Any]] = []
+    for chunk in chunks:
+        chunk_id = str(chunk.get("chunk_id") or "").strip()
+        content = str(chunk.get("content") or "").strip()
+        if not chunk_id or not content:
+            continue
+        rows.append(
+            {
+                "document_id": document_id,
+                "chunk_id": chunk_id,
+                "ordinal": int(chunk.get("ordinal") or 0),
+                "content": content,
+                "content_hash": str(chunk.get("content_hash") or ""),
+            }
+        )
+    rows.sort(key=lambda item: (item["ordinal"], item["chunk_id"]))
+    with engine.begin() as conn:
+        conn.execute(
+            research_chunks.delete().where(research_chunks.c.document_id == document_id)
+        )
+        if rows:
+            conn.execute(research_chunks.insert(), rows)
+
+
+def replace_research_embeddings(
+    engine: Engine,
+    *,
+    document_id: str,
+    embedding_model_id: str,
+    embeddings: List[Dict[str, Any]],
+) -> None:
+    rows: List[Dict[str, Any]] = []
+    for item in embeddings:
+        chunk_id = str(item.get("chunk_id") or "").strip()
+        vector = item.get("vector")
+        if not chunk_id or not isinstance(vector, list) or not vector:
+            continue
+        rows.append(
+            {
+                "document_id": document_id,
+                "chunk_id": chunk_id,
+                "embedding_model_id": embedding_model_id,
+                "vector": vector,
+            }
+        )
+    with engine.begin() as conn:
+        conn.execute(
+            research_embeddings.delete()
+            .where(research_embeddings.c.document_id == document_id)
+            .where(research_embeddings.c.embedding_model_id == embedding_model_id)
+        )
+        if rows:
+            conn.execute(research_embeddings.insert(), rows)
+
+
+def mark_research_document_embedded(
+    engine: Engine,
+    *,
+    document_id: str,
+    embedding_model_id: str,
+) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            research_documents.update()
+            .where(research_documents.c.document_id == document_id)
+            .values(
+                embedding_model_id=embedding_model_id,
+                status="embedded",
+                embedded_at=text("now()"),
+                updated_at=text("now()"),
+            )
+        )
+
+
 def mark_research_document_failed(
     engine: Engine,
     *,
@@ -1086,3 +1168,53 @@ def count_research_documents_by_status(
     with engine.begin() as conn:
         row = conn.execute(text(sql), {"source_id": source_id, "status": status}).mappings().first()
     return int(row["c"]) if row else 0
+
+
+def count_research_chunks(
+    engine: Engine,
+    *,
+    document_id: str,
+) -> int:
+    sql = """
+        SELECT count(*) AS c
+        FROM research_chunks
+        WHERE document_id = :document_id
+    """
+    with engine.begin() as conn:
+        row = conn.execute(text(sql), {"document_id": document_id}).mappings().first()
+    return int(row["c"]) if row else 0
+
+
+def count_research_embeddings(
+    engine: Engine,
+    *,
+    document_id: str,
+    embedding_model_id: str,
+) -> int:
+    sql = """
+        SELECT count(*) AS c
+        FROM research_embeddings
+        WHERE document_id = :document_id
+          AND embedding_model_id = :embedding_model_id
+    """
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(sql),
+            {"document_id": document_id, "embedding_model_id": embedding_model_id},
+        ).mappings().first()
+    return int(row["c"]) if row else 0
+
+
+def list_research_documents(
+    engine: Engine,
+    *,
+    source_id: str,
+) -> List[Dict[str, Any]]:
+    stmt = (
+        select(research_documents)
+        .where(research_documents.c.source_id == source_id)
+        .order_by(research_documents.c.created_at.asc())
+    )
+    with engine.begin() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [dict(row) for row in rows]
