@@ -57,6 +57,8 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 - `POST /v2/research/retrieval/feedback`
 - `GET /v2/research/ops/summary?topic_key=<topic>`
 - `GET /v2/research/ops/sources?topic_key=<topic>&limit=<n>`
+- `GET /v2/research/ops/documents?topic_key=<topic>`
+- `GET /v2/research/ops/dashboard` (browser UI; enter bearer token in page)
 - `POST /v2/research/sources/{source_id}/disable`
 - `POST /v2/research/sources/{source_id}/enable`
 - `POST /v2/research/governance/redact`

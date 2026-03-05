@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi.responses import HTMLResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import text
 
@@ -39,6 +40,8 @@ from app.research.contracts import (
     ResearchSourceMetricRecord,
     ResearchSourceModerationResponse,
     ResearchSourceMetricsResponse,
+    ResearchDocumentStagesResponse,
+    ResearchDocumentStageCount,
     ResearchScoreBreakdown,
     ResearchSignal,
     ResearchSourceListResponse,
@@ -106,6 +109,7 @@ from app.storage.db import (
     create_research_bootstrap_event,
     get_latest_research_bootstrap_event,
     list_research_source_metrics,
+    list_research_document_stage_counts,
     redact_research_raw_payloads,
     search_research_chunks,
     search_research_document_chunks,
@@ -324,6 +328,141 @@ def _bootstrap_response_from_event(
         results=results,
         ingest=ingest,
     )
+
+
+OPS_DASHBOARD_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Context API Research Ops</title>
+  <style>
+    :root { color-scheme: light; --bg:#f5f7fb; --card:#fff; --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --ok:#0a7a3f; --warn:#b45309; --bad:#b91c1c; }
+    body { margin:0; font-family: "Segoe UI",Tahoma,sans-serif; background:var(--bg); color:var(--ink); }
+    .wrap { max-width:1100px; margin:0 auto; padding:16px; }
+    .toolbar { display:grid; grid-template-columns:2fr 2fr 1fr auto; gap:8px; margin-bottom:12px; }
+    input,select,button { padding:10px; border:1px solid var(--line); border-radius:8px; font-size:14px; }
+    button { cursor:pointer; background:#0f172a; color:#fff; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap:10px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; }
+    .k { color:var(--muted); font-size:12px; }
+    .v { font-size:24px; font-weight:700; margin-top:4px; }
+    table { width:100%; border-collapse: collapse; font-size:13px; }
+    th,td { border-bottom:1px solid var(--line); padding:8px 6px; text-align:left; vertical-align:top; }
+    th { color:var(--muted); font-weight:600; }
+    .status-running { color:var(--warn); font-weight:700; }
+    .status-completed { color:var(--ok); font-weight:700; }
+    .status-failed { color:var(--bad); font-weight:700; }
+    .muted { color:var(--muted); }
+    pre { white-space: pre-wrap; background:#0b1020; color:#dbeafe; padding:10px; border-radius:8px; max-height:220px; overflow:auto; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h2>Context API Research Ops Dashboard</h2>
+    <div class="toolbar">
+      <input id="token" type="password" placeholder="Bearer token (CONTEXT_API_TOKEN)" />
+      <input id="topic" value="ai_research" placeholder="topic_key" />
+      <select id="refresh">
+        <option value="10">10s</option>
+        <option value="30" selected>30s</option>
+        <option value="60">60s</option>
+      </select>
+      <button id="load">Refresh</button>
+    </div>
+    <div class="grid" id="summaryCards"></div>
+    <div class="card" style="margin-top:10px;">
+      <div class="k">Document Stages</div>
+      <table><thead><tr><th>Status</th><th>Count</th></tr></thead><tbody id="stagesBody"></tbody></table>
+    </div>
+    <div class="card" style="margin-top:10px;">
+      <div class="k">Sources</div>
+      <table><thead><tr><th>Name</th><th>Enabled</th><th>Failures</th><th>Cooldown</th><th>Docs</th><th>Embedded</th><th>Failed</th></tr></thead><tbody id="sourcesBody"></tbody></table>
+    </div>
+    <div class="card" style="margin-top:10px;">
+      <div class="k">Latest Open/Recent Run</div>
+      <pre id="runJson" class="muted">{}</pre>
+    </div>
+  </div>
+  <script>
+    const el = (id) => document.getElementById(id);
+    const tokenEl = el("token");
+    const topicEl = el("topic");
+    const refreshEl = el("refresh");
+    const loadBtn = el("load");
+    const cards = el("summaryCards");
+    const stagesBody = el("stagesBody");
+    const sourcesBody = el("sourcesBody");
+    const runJson = el("runJson");
+    const keyToken = "ctx_ops_token";
+    const keyTopic = "ctx_ops_topic";
+    tokenEl.value = localStorage.getItem(keyToken) || "";
+    topicEl.value = localStorage.getItem(keyTopic) || topicEl.value;
+    let timer = null;
+
+    function hdrs() {
+      const t = tokenEl.value.trim();
+      return t ? { "Authorization": "Bearer " + t } : {};
+    }
+
+    async function jget(path) {
+      const r = await fetch(path, { headers: hdrs() });
+      if (!r.ok) throw new Error(path + " -> " + r.status);
+      return await r.json();
+    }
+
+    function card(k, v) {
+      return `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+    }
+
+    async function refresh() {
+      localStorage.setItem(keyToken, tokenEl.value);
+      localStorage.setItem(keyTopic, topicEl.value);
+      const topic = encodeURIComponent(topicEl.value.trim() || "ai_research");
+      try {
+        const [summary, sources, stages] = await Promise.all([
+          jget(`/v2/research/ops/summary?topic_key=${topic}`),
+          jget(`/v2/research/ops/sources?topic_key=${topic}&limit=20`),
+          jget(`/v2/research/ops/documents?topic_key=${topic}`)
+        ]);
+        cards.innerHTML = [
+          card("Sources", summary.sources_total),
+          card("In Cooldown", summary.sources_in_cooldown),
+          card("Docs Total", summary.documents_total),
+          card("Docs Embedded", summary.documents_embedded),
+          card("Runs Open", summary.runs_open),
+          card("24h Run Fail Rate", (summary.run_failure_rate_24h * 100).toFixed(1) + "%"),
+        ].join("");
+
+        stagesBody.innerHTML = (stages.items || []).map(x => `<tr><td>${x.status}</td><td>${x.count}</td></tr>`).join("");
+        sourcesBody.innerHTML = (sources.items || []).map(s => `<tr>
+          <td>${s.name}</td>
+          <td>${s.enabled}</td>
+          <td>${s.consecutive_failures}</td>
+          <td>${s.cooldown_until || ""}</td>
+          <td>${s.documents_total}</td>
+          <td>${s.documents_embedded}</td>
+          <td>${s.documents_failed}</td>
+        </tr>`).join("");
+
+        const openRun = await jget(`/v2/research/review/queue?topic_key=${topic}&limit=1`).catch(() => null);
+        runJson.textContent = JSON.stringify({ summary, openRun }, null, 2);
+      } catch (e) {
+        cards.innerHTML = `<div class="card"><div class="k">Error</div><div class="v" style="font-size:14px">${String(e)}</div></div>`;
+      }
+    }
+
+    function startTimer() {
+      if (timer) clearInterval(timer);
+      timer = setInterval(refresh, Number(refreshEl.value) * 1000);
+    }
+
+    loadBtn.addEventListener("click", refresh);
+    refreshEl.addEventListener("change", startTimer);
+    refresh(); startTimer();
+  </script>
+</body>
+</html>"""
 
 
 def create_app(app_settings: Settings | None = None) -> FastAPI:
@@ -1404,6 +1543,29 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
             for row in rows
         ]
         return ResearchSourceMetricsResponse(topic_key=normalized_topic, items=items)
+
+    @app.get("/v2/research/ops/documents", response_model=ResearchDocumentStagesResponse)
+    def research_ops_documents_endpoint(
+        topic_key: str,
+        _: None = Depends(require_bearer),
+    ) -> ResearchDocumentStagesResponse:
+        normalized_topic = topic_key.strip().lower()
+        rows = list_research_document_stage_counts(
+            app.state.engine,
+            topic_key=normalized_topic,
+        )
+        items = [
+            ResearchDocumentStageCount(
+                status=str(row.get("status") or "unknown"),
+                count=int(row.get("count") or 0),
+            )
+            for row in rows
+        ]
+        return ResearchDocumentStagesResponse(topic_key=normalized_topic, items=items)
+
+    @app.get("/v2/research/ops/dashboard", response_class=HTMLResponse)
+    def research_ops_dashboard_endpoint() -> HTMLResponse:
+        return HTMLResponse(content=OPS_DASHBOARD_HTML)
 
     @app.post("/v2/research/governance/redact", response_model=ResearchRedactResponse)
     def research_governance_redact_endpoint(

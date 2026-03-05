@@ -1687,6 +1687,27 @@ def list_research_source_metrics(
     return [dict(row) for row in rows]
 
 
+def list_research_document_stage_counts(
+    engine: Engine,
+    *,
+    topic_key: str,
+) -> List[Dict[str, Any]]:
+    sql = """
+        SELECT
+            d.status,
+            count(*) AS count
+        FROM research_documents d
+        JOIN research_sources s
+          ON s.source_id = d.source_id
+        WHERE s.topic_key = :topic_key
+        GROUP BY d.status
+        ORDER BY d.status ASC
+    """
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), {"topic_key": topic_key}).mappings().all()
+    return [dict(row) for row in rows]
+
+
 def redact_research_raw_payloads(
     engine: Engine,
     *,

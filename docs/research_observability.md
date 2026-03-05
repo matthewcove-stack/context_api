@@ -6,6 +6,12 @@ Operational dashboards and alert query references for the research ingestion and
 ## API-backed dashboard endpoints
 - `GET /v2/research/ops/summary?topic_key=...`
 - `GET /v2/research/ops/sources?topic_key=...&limit=...`
+- `GET /v2/research/ops/documents?topic_key=...`
+- `GET /v2/research/review/queue?topic_key=...&limit=...`
+
+## Lightweight browser dashboard
+- `GET /v2/research/ops/dashboard`
+- Enter bearer token and topic key in the page controls.
 
 ## Core SQL views (reference queries)
 

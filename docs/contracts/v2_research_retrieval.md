@@ -98,6 +98,19 @@ Response:
   - `documents_failed`
   - `retrieval_queries_24h`
 
+## Endpoint: `GET /v2/research/ops/documents?topic_key=...`
+
+Response:
+- `topic_key`
+- `items[]`:
+  - `status`
+  - `count`
+
+## Endpoint: `GET /v2/research/ops/dashboard`
+
+Response:
+- HTML dashboard shell that calls ops/review endpoints with bearer auth from page input.
+
 ## Endpoint: `POST /v2/research/sources/{source_id}/disable`
 ## Endpoint: `POST /v2/research/sources/{source_id}/enable`
 

@@ -165,6 +165,12 @@ def test_phase5_feedback_and_ops_summary() -> None:
     assert source_items[0]["source_id"] == source_id
     assert source_items[0]["documents_total"] >= 1
 
+    docs = client.get(f"/v2/research/ops/documents?topic_key={topic_key}", headers=headers)
+    assert docs.status_code == 200
+    doc_items = docs.json()["items"]
+    assert doc_items
+    assert any(item["count"] >= 1 for item in doc_items)
+
     disable = client.post(f"/v2/research/sources/{source_id}/disable", headers=headers)
     assert disable.status_code == 200
     assert disable.json()["enabled"] is False

@@ -213,6 +213,16 @@ class ResearchSourceMetricsResponse(BaseModel):
     items: List[ResearchSourceMetricRecord] = Field(default_factory=list)
 
 
+class ResearchDocumentStageCount(BaseModel):
+    status: str
+    count: int
+
+
+class ResearchDocumentStagesResponse(BaseModel):
+    topic_key: str
+    items: List[ResearchDocumentStageCount] = Field(default_factory=list)
+
+
 class ResearchSourceModerationResponse(BaseModel):
     source_id: str
     enabled: bool
