@@ -15,6 +15,7 @@ def reset_database() -> None:
                 """
                 TRUNCATE
                     research_retrieval_feedback,
+                    research_bootstrap_events,
                     research_relevance_scores,
                     research_query_logs,
                     research_embeddings,

@@ -247,3 +247,67 @@ class ResearchReviewQueueItem(BaseModel):
 class ResearchReviewQueueResponse(BaseModel):
     topic_key: str
     items: List[ResearchReviewQueueItem] = Field(default_factory=list)
+
+
+class SourceSuggestion(BaseModel):
+    kind: Literal["rss", "atom", "site_map", "html_listing", "api"]
+    name: str
+    base_url: str
+    tags: List[str] = Field(default_factory=list)
+    poll_interval_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
+    rate_limit_per_hour: Optional[int] = Field(default=None, ge=1, le=3600)
+    source_weight: Optional[float] = Field(default=None, ge=0.0, le=5.0)
+    robots_mode: Optional[Literal["strict", "ignore"]] = None
+
+
+class ResearchBootstrapRequest(BaseModel):
+    topic_key: str
+    suggestions: List[SourceSuggestion] = Field(min_length=1, max_length=1000)
+    trigger_ingest: bool = True
+    trigger: Literal["manual", "event"] = "event"
+    idempotency_key: Optional[str] = None
+    dry_run: bool = False
+
+
+class ResearchBootstrapSummary(BaseModel):
+    received: int = 0
+    valid: int = 0
+    invalid: int = 0
+    created: int = 0
+    updated: int = 0
+    skipped_duplicate: int = 0
+
+
+class ResearchBootstrapResult(BaseModel):
+    index: int
+    status: Literal["created", "updated", "invalid", "skipped_duplicate"]
+    reason: Optional[str] = None
+    source_id: Optional[str] = None
+
+
+class ResearchBootstrapIngest(BaseModel):
+    triggered: bool
+    run_id: Optional[str] = None
+    status: Optional[Literal["queued", "running", "completed", "failed"]] = None
+
+
+class ResearchBootstrapResponse(BaseModel):
+    topic_key: str
+    summary: ResearchBootstrapSummary
+    results: List[ResearchBootstrapResult] = Field(default_factory=list)
+    ingest: ResearchBootstrapIngest
+
+
+class ResearchBootstrapStatusEvent(BaseModel):
+    event_id: str
+    request_hash: str
+    idempotency_key: Optional[str] = None
+    summary: ResearchBootstrapSummary
+    run_id: Optional[str] = None
+    run_status: Optional[Literal["queued", "running", "completed", "failed"]] = None
+    created_at: Optional[datetime] = None
+
+
+class ResearchBootstrapStatusResponse(BaseModel):
+    topic_key: str
+    latest_bootstrap: Optional[ResearchBootstrapStatusEvent] = None

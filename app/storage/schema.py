@@ -274,3 +274,23 @@ research_retrieval_feedback = Table(
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Index("ix_research_retrieval_feedback_trace", "trace_id", "created_at"),
 )
+
+research_bootstrap_events = Table(
+    "research_bootstrap_events",
+    metadata,
+    Column("event_id", UUID(as_uuid=True), primary_key=True),
+    Column("topic_key", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=True),
+    Column("request_hash", Text, nullable=False),
+    Column("received", Integer, nullable=False, server_default=text("0")),
+    Column("valid", Integer, nullable=False, server_default=text("0")),
+    Column("invalid", Integer, nullable=False, server_default=text("0")),
+    Column("created", Integer, nullable=False, server_default=text("0")),
+    Column("updated", Integer, nullable=False, server_default=text("0")),
+    Column("skipped_duplicate", Integer, nullable=False, server_default=text("0")),
+    Column("results", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("run_id", UUID(as_uuid=True), ForeignKey("research_ingestion_runs.run_id", ondelete="SET NULL"), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Index("ix_research_bootstrap_events_topic_created_at", "topic_key", "created_at"),
+    Index("ix_research_bootstrap_events_idempotency_key", "idempotency_key"),
+)

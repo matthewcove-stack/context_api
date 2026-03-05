@@ -16,6 +16,7 @@ from app.storage.schema import (
     projects,
     research_documents,
     research_chunks,
+    research_bootstrap_events,
     research_embeddings,
     research_ingestion_runs,
     research_relevance_scores,
@@ -1752,3 +1753,93 @@ def list_research_review_queue(
             {"topic_key": topic_key, "limit": max(limit, 1)},
         ).mappings().all()
     return [dict(row) for row in rows]
+
+
+def get_research_bootstrap_event_by_idempotency(
+    engine: Engine,
+    *,
+    topic_key: str,
+    idempotency_key: str,
+) -> Optional[Dict[str, Any]]:
+    stmt = (
+        select(research_bootstrap_events)
+        .where(research_bootstrap_events.c.topic_key == topic_key)
+        .where(research_bootstrap_events.c.idempotency_key == idempotency_key)
+        .order_by(research_bootstrap_events.c.created_at.desc())
+        .limit(1)
+    )
+    with engine.begin() as conn:
+        row = conn.execute(stmt).mappings().first()
+    return dict(row) if row else None
+
+
+def create_research_bootstrap_event(
+    engine: Engine,
+    *,
+    topic_key: str,
+    request_hash: str,
+    idempotency_key: Optional[str],
+    summary: Dict[str, int],
+    results: List[Dict[str, Any]],
+    run_id: Optional[str],
+) -> Dict[str, Any]:
+    event_id = uuid.uuid4()
+    parsed_run_id = None
+    if run_id:
+        try:
+            parsed_run_id = uuid.UUID(str(run_id))
+        except ValueError:
+            parsed_run_id = None
+    with engine.begin() as conn:
+        row = conn.execute(
+            research_bootstrap_events.insert()
+            .values(
+                {
+                    "event_id": event_id,
+                    "topic_key": topic_key,
+                    "idempotency_key": idempotency_key,
+                    "request_hash": request_hash,
+                    "received": int(summary.get("received") or 0),
+                    "valid": int(summary.get("valid") or 0),
+                    "invalid": int(summary.get("invalid") or 0),
+                    "created": int(summary.get("created") or 0),
+                    "updated": int(summary.get("updated") or 0),
+                    "skipped_duplicate": int(summary.get("skipped_duplicate") or 0),
+                    "results": results,
+                    "run_id": parsed_run_id,
+                }
+            )
+            .returning(research_bootstrap_events)
+        ).mappings().first()
+    return dict(row) if row else {}
+
+
+def get_latest_research_bootstrap_event(
+    engine: Engine,
+    *,
+    topic_key: str,
+) -> Optional[Dict[str, Any]]:
+    stmt = (
+        select(research_bootstrap_events)
+        .where(research_bootstrap_events.c.topic_key == topic_key)
+        .order_by(research_bootstrap_events.c.created_at.desc())
+        .limit(1)
+    )
+    with engine.begin() as conn:
+        row = conn.execute(stmt).mappings().first()
+    return dict(row) if row else None
+
+
+def count_research_bootstrap_events(
+    engine: Engine,
+    *,
+    topic_key: str,
+) -> int:
+    sql = """
+        SELECT count(*) AS c
+        FROM research_bootstrap_events
+        WHERE topic_key = :topic_key
+    """
+    with engine.begin() as conn:
+        row = conn.execute(text(sql), {"topic_key": topic_key}).mappings().first()
+    return int(row["c"]) if row else 0

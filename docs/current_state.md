@@ -35,6 +35,10 @@
   - Run-level backpressure budget (`RESEARCH_RUN_MAX_NEW_ITEMS`) stops runaway ingestion growth.
   - PDF-aware extraction path for research documents (`application/pdf`).
   - Env-driven scoring weight knobs for relevance tuning.
+- Bootstrap loop closure:
+  - `POST /v2/research/sources/bootstrap` for source suggestion ingestion + optional run trigger.
+  - `GET /v2/research/bootstrap/status` for latest onboarding/run rollup per topic.
+  - `research_bootstrap_events` audit table for bootstrap requests/results.
 - Dockerized test workflow (`docker compose run --rm api pytest`).
 
 ## Implemented in this phase
@@ -67,9 +71,11 @@
 
 ### New `/v2` research phase 1 ingestion
 - `POST /v2/research/sources/upsert`
+- `POST /v2/research/sources/bootstrap`
 - `GET /v2/research/sources?topic_key=...`
 - `POST /v2/research/ingest/run`
 - `GET /v2/research/ingest/runs/{run_id}`
+- `GET /v2/research/bootstrap/status?topic_key=...`
 
 ### New `/v2` research phase 4 retrieval
 - `POST /v2/research/context/pack`
@@ -106,6 +112,7 @@
 - `research_query_logs`
 - `research_relevance_scores`
 - `research_retrieval_feedback`
+- `research_bootstrap_events`
 
 ## Current worker model
 - Intel worker command:
@@ -121,9 +128,17 @@
   - DR runbook is documented in `docs/research_operations.md`
 
 ## Actions integration status
-- ChatGPT Actions assets currently expose read-only intel + research retrieval endpoints:
+- ChatGPT Actions assets expose intel/research retrieval endpoints and optional onboarding endpoints (`/v2/research/sources/bootstrap`, `/v2/research/bootstrap/status`) for setup workflows:
   - `adapters/chatgpt_actions/openapi.yaml`
   - `adapters/chatgpt_actions/gpt_instructions.md`
+- Codex MCP bridge starter exposes read-only retrieval tools (`search`, `fetch`):
+  - `app/mcp_bridge/server.py`
+  - `scripts/run_mcp_bridge.py`
+  - Contract: `docs/contracts/mcp_bridge_v1.md`
+- Separate Codex MCP ops bridge exposes write-lite onboarding tools:
+  - `app/mcp_bridge_ops/server.py`
+  - `scripts/run_mcp_ops_bridge.py`
+  - Contract: `docs/contracts/mcp_ops_bridge_v1.md`
 - HTTPS exposure guidance:
   - `docs/chatgpt_actions_setup.md`
   - `docs/deployment/cloudflare_tunnel.md`

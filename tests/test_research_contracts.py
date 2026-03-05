@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.research.contracts import (
+    ResearchBootstrapRequest,
     ResearchFeedbackRequest,
     ResearchContextPackRequest,
     ResearchIngestRunRequest,
@@ -41,3 +42,13 @@ def test_research_feedback_contract() -> None:
         verdict="useful",
     )
     assert payload.query_log_id is None
+
+
+def test_research_bootstrap_contract_defaults() -> None:
+    payload = ResearchBootstrapRequest(
+        topic_key="ai_supply",
+        suggestions=[{"kind": "rss", "name": "Feed", "base_url": "https://example.com/feed"}],
+    )
+    assert payload.trigger_ingest is True
+    assert payload.trigger == "event"
+    assert payload.dry_run is False

@@ -46,3 +46,20 @@ Operational controls for the research ingestion and retrieval pipeline.
 2. Inspect `ops/summary` for elevated `sources_in_cooldown` or `run_failure_rate_24h`.
 3. Lower ingest pressure by setting `RESEARCH_RUN_MAX_NEW_ITEMS` for controlled catch-up.
 4. Re-enable normal budget after source health stabilizes.
+
+## First-time topic onboarding (API + MCP)
+1. Bootstrap source suggestions:
+   - API: `POST /v2/research/sources/bootstrap` with `trigger_ingest=true`.
+   - MCP ops: tool `sources_bootstrap`.
+2. Poll run completion:
+   - API: `GET /v2/research/ingest/runs/{run_id}`.
+   - MCP ops: tool `ingest_status`.
+3. Verify retrieval health:
+   - API: `GET /v2/research/ops/summary?topic_key=...`.
+   - MCP ops: tool `ops_summary`.
+4. Retrieve context:
+   - MCP retrieval bridge: tool `search`, then `fetch` for expansion.
+
+## Smoke check command
+- `docker compose run --rm api pytest tests/test_research_bootstrap_integration.py::test_bootstrap_to_worker_to_context_pack`
+- `powershell -ExecutionPolicy Bypass -File scripts/bootstrap_smoke.ps1 -BaseUrl http://localhost:8001 -Token change-me -TopicKey smoke_topic -FeedUrl https://example.com/feed`

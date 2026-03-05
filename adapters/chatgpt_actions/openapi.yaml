@@ -434,6 +434,130 @@ components:
           items:
             $ref: "#/components/schemas/ResearchSourceMetricItem"
       required: [topic_key, items]
+    SourceSuggestion:
+      type: object
+      properties:
+        kind:
+          type: string
+          enum: [rss, atom, site_map, html_listing, api]
+        name:
+          type: string
+        base_url:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        poll_interval_minutes:
+          type: integer
+        rate_limit_per_hour:
+          type: integer
+        source_weight:
+          type: number
+        robots_mode:
+          type: string
+          enum: [strict, ignore]
+      required: [kind, name, base_url]
+    ResearchBootstrapRequest:
+      type: object
+      properties:
+        topic_key:
+          type: string
+        suggestions:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceSuggestion"
+        trigger_ingest:
+          type: boolean
+        trigger:
+          type: string
+          enum: [manual, event]
+        idempotency_key:
+          type: string
+        dry_run:
+          type: boolean
+      required: [topic_key, suggestions]
+    ResearchBootstrapSummary:
+      type: object
+      properties:
+        received:
+          type: integer
+        valid:
+          type: integer
+        invalid:
+          type: integer
+        created:
+          type: integer
+        updated:
+          type: integer
+        skipped_duplicate:
+          type: integer
+      required: [received, valid, invalid, created, updated, skipped_duplicate]
+    ResearchBootstrapResult:
+      type: object
+      properties:
+        index:
+          type: integer
+        status:
+          type: string
+          enum: [created, updated, invalid, skipped_duplicate]
+        reason:
+          type: string
+        source_id:
+          type: string
+      required: [index, status]
+    ResearchBootstrapIngest:
+      type: object
+      properties:
+        triggered:
+          type: boolean
+        run_id:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed]
+      required: [triggered]
+    ResearchBootstrapResponse:
+      type: object
+      properties:
+        topic_key:
+          type: string
+        summary:
+          $ref: "#/components/schemas/ResearchBootstrapSummary"
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResearchBootstrapResult"
+        ingest:
+          $ref: "#/components/schemas/ResearchBootstrapIngest"
+      required: [topic_key, summary, results, ingest]
+    ResearchBootstrapStatusEvent:
+      type: object
+      properties:
+        event_id:
+          type: string
+        request_hash:
+          type: string
+        idempotency_key:
+          type: string
+        summary:
+          $ref: "#/components/schemas/ResearchBootstrapSummary"
+        run_id:
+          type: string
+        run_status:
+          type: string
+          enum: [queued, running, completed, failed]
+        created_at:
+          type: string
+      required: [event_id, request_hash, summary]
+    ResearchBootstrapStatusResponse:
+      type: object
+      properties:
+        topic_key:
+          type: string
+        latest_bootstrap:
+          $ref: "#/components/schemas/ResearchBootstrapStatusEvent"
+      required: [topic_key]
 paths:
   /v2/context/pack:
     post:
@@ -586,6 +710,44 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ResearchChunkSearchResponse"
+  /v2/research/sources/bootstrap:
+    post:
+      summary: Bootstrap source suggestions for a topic and optionally trigger ingestion
+      operationId: bootstrapResearchSources
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResearchBootstrapRequest"
+      responses:
+        "200":
+          description: Research source bootstrap response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResearchBootstrapResponse"
+  /v2/research/bootstrap/status:
+    get:
+      summary: Get latest bootstrap event status for a topic
+      operationId: getResearchBootstrapStatus
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: topic_key
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Research bootstrap status response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResearchBootstrapStatusResponse"
   /v2/research/ops/summary:
     get:
       summary: Get research pipeline ops summary for a topic

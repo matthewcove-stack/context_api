@@ -4,7 +4,12 @@ import logging
 import os
 import time
 import uuid
+import json
+import hashlib
+from collections import deque
+from threading import Lock
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from sqlalchemy.exc import SQLAlchemyError
@@ -40,6 +45,13 @@ from app.research.contracts import (
     ResearchSourceRecord,
     ResearchSourceUpsertRequest,
     ResearchSourceUpsertResponse,
+    ResearchBootstrapRequest,
+    ResearchBootstrapResponse,
+    ResearchBootstrapSummary,
+    ResearchBootstrapResult,
+    ResearchBootstrapIngest,
+    ResearchBootstrapStatusResponse,
+    ResearchBootstrapStatusEvent,
 )
 from app.research.embeddings import embed_texts
 from app.research.scoring import blend_score, cosine_similarity, embedding_score, lexical_score, recency_score, source_weight_score
@@ -90,6 +102,9 @@ from app.storage.db import (
     insert_research_retrieval_feedback,
     get_research_ops_summary,
     list_research_review_queue,
+    get_research_bootstrap_event_by_idempotency,
+    create_research_bootstrap_event,
+    get_latest_research_bootstrap_event,
     list_research_source_metrics,
     redact_research_raw_payloads,
     search_research_chunks,
@@ -119,6 +134,11 @@ DEFAULT_RESEARCH_MAX_ITEMS = 3
 DEFAULT_RESEARCH_MAX_CHUNKS = 3
 MAX_RESEARCH_MAX_CHUNKS = 10
 DEFAULT_RESEARCH_MAX_CHARS = 600
+DEFAULT_BOOTSTRAP_MAX_SUGGESTIONS = 200
+DEFAULT_BOOTSTRAP_CALLS_PER_MINUTE = 20
+
+_bootstrap_rate_lock = Lock()
+_bootstrap_rate_state: Dict[str, deque[float]] = {}
 
 
 def _trim_text(text: str, max_chars: int) -> str:
@@ -237,6 +257,75 @@ def _clean_snippet(snippet: str) -> str:
     return snippet.replace("<b>", "").replace("</b>", "").strip()
 
 
+def _to_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _topic_default_policy() -> Dict[str, Any]:
+    return {
+        "poll_interval_minutes": _to_int(os.getenv("RESEARCH_DEFAULT_POLL_INTERVAL_MINUTES", "60")) or 60,
+        "rate_limit_per_hour": _to_int(os.getenv("RESEARCH_DEFAULT_RATE_LIMIT_PER_HOUR", "30")) or 30,
+        "source_weight": float(os.getenv("RESEARCH_DEFAULT_SOURCE_WEIGHT", "1.0")),
+        "robots_mode": os.getenv("RESEARCH_ROBOTS_MODE", "strict").strip().lower() or "strict",
+    }
+
+
+def _hash_bootstrap_request(topic_key: str, payload: Dict[str, Any]) -> str:
+    canonical = {"topic_key": topic_key, "payload": payload}
+    body = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def _enforce_bootstrap_rate_limit(token: str) -> None:
+    max_calls = _to_int(os.getenv("RESEARCH_BOOTSTRAP_MAX_CALLS_PER_MINUTE", str(DEFAULT_BOOTSTRAP_CALLS_PER_MINUTE)))
+    if max_calls <= 0:
+        return
+    now = time.time()
+    window_start = now - 60.0
+    with _bootstrap_rate_lock:
+        queue = _bootstrap_rate_state.setdefault(token, deque())
+        while queue and queue[0] < window_start:
+            queue.popleft()
+        if len(queue) >= max_calls:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Bootstrap rate limit exceeded",
+            )
+        queue.append(now)
+
+
+def _bootstrap_response_from_event(
+    event: Dict[str, Any],
+    run_status: Optional[str] = None,
+) -> ResearchBootstrapResponse:
+    summary = ResearchBootstrapSummary(
+        received=_to_int(event.get("received")),
+        valid=_to_int(event.get("valid")),
+        invalid=_to_int(event.get("invalid")),
+        created=_to_int(event.get("created")),
+        updated=_to_int(event.get("updated")),
+        skipped_duplicate=_to_int(event.get("skipped_duplicate")),
+    )
+    raw_results = event.get("results") or []
+    results = [ResearchBootstrapResult.model_validate(item) for item in raw_results if isinstance(item, dict)]
+    run_id = str(event.get("run_id")) if event.get("run_id") else None
+    status_value = run_status or (str(event.get("run_status")) if event.get("run_status") else None)
+    ingest = ResearchBootstrapIngest(
+        triggered=bool(run_id),
+        run_id=run_id,
+        status=status_value if status_value in {"queued", "running", "completed", "failed"} else None,
+    )
+    return ResearchBootstrapResponse(
+        topic_key=str(event.get("topic_key") or ""),
+        summary=summary,
+        results=results,
+        ingest=ingest,
+    )
+
+
 def create_app(app_settings: Settings | None = None) -> FastAPI:
     app_settings = app_settings or default_settings
     app = FastAPI()
@@ -250,7 +339,7 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
     def require_bearer(
         authorization: str | None = Header(default=None),
         settings: Settings = Depends(get_settings),
-    ) -> None:
+    ) -> str:
         if not authorization:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
         try:
@@ -259,6 +348,7 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authorization header")
         if scheme.lower() != "bearer" or token != settings.context_api_token:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid bearer token")
+        return token
 
     @app.get("/health")
     def health() -> Dict[str, str]:
@@ -718,6 +808,198 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
                 )
             )
         return ResearchSourceListResponse(items=items)
+
+    @app.post("/v2/research/sources/bootstrap", response_model=ResearchBootstrapResponse)
+    def bootstrap_research_sources_endpoint(
+        payload: ResearchBootstrapRequest,
+        token: str = Depends(require_bearer),
+    ) -> ResearchBootstrapResponse:
+        normalized_topic = payload.topic_key.strip().lower()
+        max_suggestions = _to_int(
+            os.getenv("RESEARCH_BOOTSTRAP_MAX_SUGGESTIONS", str(DEFAULT_BOOTSTRAP_MAX_SUGGESTIONS))
+        ) or DEFAULT_BOOTSTRAP_MAX_SUGGESTIONS
+        if len(payload.suggestions) > max_suggestions:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"suggestions exceeds limit ({max_suggestions})",
+            )
+        if not payload.dry_run:
+            _enforce_bootstrap_rate_limit(token)
+
+        request_hash = _hash_bootstrap_request(
+            normalized_topic,
+            payload.model_dump(exclude_none=True),
+        )
+        if payload.idempotency_key and not payload.dry_run:
+            existing_event = get_research_bootstrap_event_by_idempotency(
+                app.state.engine,
+                topic_key=normalized_topic,
+                idempotency_key=payload.idempotency_key,
+            )
+            if existing_event:
+                existing_hash = str(existing_event.get("request_hash") or "")
+                if existing_hash and existing_hash != request_hash:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="idempotency_key already used with different payload",
+                    )
+                run_status = None
+                run_id = existing_event.get("run_id")
+                if run_id:
+                    run = get_research_ingestion_run(app.state.engine, run_id=str(run_id))
+                    run_status = str(run.get("status") or "") if run else None
+                return _bootstrap_response_from_event(existing_event, run_status=run_status)
+
+        defaults = _topic_default_policy()
+        existing_rows = list_research_sources(
+            app.state.engine,
+            topic_key=normalized_topic,
+            enabled_only=False,
+        )
+        existing_source_ids = {str(row.get("source_id") or "") for row in existing_rows}
+        seen_source_ids = set()
+        max_items_per_run = max(int(os.getenv("RESEARCH_MAX_ITEMS_PER_SOURCE", "50")), 1)
+        summary = {
+            "received": len(payload.suggestions),
+            "valid": 0,
+            "invalid": 0,
+            "created": 0,
+            "updated": 0,
+            "skipped_duplicate": 0,
+        }
+        results: List[ResearchBootstrapResult] = []
+        valid_source_ids: List[str] = []
+
+        for index, suggestion in enumerate(payload.suggestions):
+            canonical = canonicalize_url(suggestion.base_url)
+            parsed = urlparse(canonical) if canonical else None
+            if not canonical or not parsed or not parsed.netloc:
+                summary["invalid"] += 1
+                results.append(
+                    ResearchBootstrapResult(index=index, status="invalid", reason="invalid base_url")
+                )
+                continue
+            source_id = compute_source_id(topic_key=normalized_topic, kind=suggestion.kind, base_url=canonical)
+            if source_id in seen_source_ids:
+                summary["skipped_duplicate"] += 1
+                results.append(
+                    ResearchBootstrapResult(
+                        index=index,
+                        status="skipped_duplicate",
+                        reason="duplicate source in request",
+                        source_id=source_id,
+                    )
+                )
+                continue
+            seen_source_ids.add(source_id)
+            summary["valid"] += 1
+            valid_source_ids.append(source_id)
+            effective_poll = suggestion.poll_interval_minutes or int(defaults["poll_interval_minutes"])
+            effective_rate = suggestion.rate_limit_per_hour or int(defaults["rate_limit_per_hour"])
+            effective_weight = suggestion.source_weight if suggestion.source_weight is not None else float(defaults["source_weight"])
+            effective_robots = suggestion.robots_mode or str(defaults["robots_mode"])
+            status_value = "updated" if source_id in existing_source_ids else "created"
+
+            if not payload.dry_run:
+                upsert_result = upsert_research_source(
+                    app.state.engine,
+                    source_id=source_id,
+                    topic_key=normalized_topic,
+                    kind=suggestion.kind,
+                    name=suggestion.name.strip(),
+                    base_url_original=suggestion.base_url.strip(),
+                    base_url_canonical=canonical,
+                    enabled=True,
+                    tags=[tag.strip().lower() for tag in suggestion.tags if tag.strip()],
+                    poll_interval_minutes=effective_poll,
+                    rate_limit_per_hour=effective_rate,
+                    robots_mode=effective_robots,
+                    max_items_per_run=max_items_per_run,
+                    source_weight=float(effective_weight),
+                )
+                status_value = str(upsert_result.get("status") or status_value)
+            if status_value == "created":
+                summary["created"] += 1
+                existing_source_ids.add(source_id)
+            else:
+                summary["updated"] += 1
+            results.append(ResearchBootstrapResult(index=index, status=status_value, source_id=source_id))
+
+        ingest_triggered = False
+        run_id: Optional[str] = None
+        run_status: Optional[str] = None
+        selected_source_ids = list(dict.fromkeys(valid_source_ids))
+        if payload.trigger_ingest and selected_source_ids and not payload.dry_run:
+            run = create_research_ingestion_run(
+                app.state.engine,
+                topic_key=normalized_topic,
+                trigger=payload.trigger,
+                requested_source_ids=selected_source_ids,
+                selected_source_ids=selected_source_ids,
+                idempotency_key=f"bootstrap:{payload.idempotency_key}" if payload.idempotency_key else None,
+            )
+            run_id = str(run.get("run_id"))
+            run_status = str(run.get("status") or "queued")
+            ingest_triggered = True
+
+        response_payload = ResearchBootstrapResponse(
+            topic_key=normalized_topic,
+            summary=ResearchBootstrapSummary(**summary),
+            results=results,
+            ingest=ResearchBootstrapIngest(
+                triggered=ingest_triggered,
+                run_id=run_id,
+                status=run_status if run_status in {"queued", "running", "completed", "failed"} else None,
+            ),
+        )
+        if not payload.dry_run:
+            create_research_bootstrap_event(
+                app.state.engine,
+                topic_key=normalized_topic,
+                request_hash=request_hash,
+                idempotency_key=payload.idempotency_key,
+                summary=summary,
+                results=[item.model_dump(mode="json", exclude_none=True) for item in results],
+                run_id=run_id,
+            )
+        return response_payload
+
+    @app.get("/v2/research/bootstrap/status", response_model=ResearchBootstrapStatusResponse)
+    def get_research_bootstrap_status_endpoint(
+        topic_key: str,
+        _: str = Depends(require_bearer),
+    ) -> ResearchBootstrapStatusResponse:
+        normalized_topic = topic_key.strip().lower()
+        event = get_latest_research_bootstrap_event(
+            app.state.engine,
+            topic_key=normalized_topic,
+        )
+        if not event:
+            return ResearchBootstrapStatusResponse(topic_key=normalized_topic, latest_bootstrap=None)
+        run_status = None
+        if event.get("run_id"):
+            run = get_research_ingestion_run(app.state.engine, run_id=str(event["run_id"]))
+            run_status = str(run.get("status") or "") if run else None
+        summary = ResearchBootstrapSummary(
+            received=_to_int(event.get("received")),
+            valid=_to_int(event.get("valid")),
+            invalid=_to_int(event.get("invalid")),
+            created=_to_int(event.get("created")),
+            updated=_to_int(event.get("updated")),
+            skipped_duplicate=_to_int(event.get("skipped_duplicate")),
+        )
+        return ResearchBootstrapStatusResponse(
+            topic_key=normalized_topic,
+            latest_bootstrap=ResearchBootstrapStatusEvent(
+                event_id=str(event.get("event_id")),
+                request_hash=str(event.get("request_hash") or ""),
+                idempotency_key=(str(event.get("idempotency_key")) if event.get("idempotency_key") else None),
+                summary=summary,
+                run_id=(str(event.get("run_id")) if event.get("run_id") else None),
+                run_status=run_status if run_status in {"queued", "running", "completed", "failed"} else None,
+                created_at=event.get("created_at"),
+            ),
+        )
 
     @app.post(
         "/v2/research/sources/{source_id}/disable",
