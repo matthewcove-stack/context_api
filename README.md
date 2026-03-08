@@ -52,13 +52,20 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 ## Research Phase 4 retrieval
 - `POST /v2/research/context/pack`
 - `POST /v2/research/documents/{document_id}/chunks:search`
+- `GET /v2/research/topics`
+- `GET /v2/research/topics/search?query=<text>`
+- `GET /v2/research/topics/{topic_key}`
+- `GET /v2/research/topics/{topic_key}/documents`
+- `POST /v2/research/topics/{topic_key}/summarize`
 
 ## Research Phase 5 scoring + ops
 - `POST /v2/research/retrieval/feedback`
 - `GET /v2/research/ops/summary?topic_key=<topic>`
 - `GET /v2/research/ops/sources?topic_key=<topic>&limit=<n>`
 - `GET /v2/research/ops/documents?topic_key=<topic>`
-- `GET /v2/research/ops/dashboard` (browser UI; enter bearer token in page)
+- `GET /v2/research/ops/storage?topic_key=<topic>`
+- `GET /v2/research/ops/progress?topic_key=<topic>&run_limit=<n>`
+- `GET /v2/research/ops/dashboard` (browser UI; bearer token + default topic are bootstrapped from server config)
 - `POST /v2/research/sources/{source_id}/disable`
 - `POST /v2/research/sources/{source_id}/enable`
 - `POST /v2/research/governance/redact`
@@ -78,6 +85,8 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 ## Worker
 - `docker compose run --rm api python -m app.intel.worker --once`
 - `docker compose run --rm api python -m app.research.worker --once`
+- Production retrieval quality requires `OPENAI_API_KEY` and `RESEARCH_EMBEDDING_MODEL` (default `text-embedding-3-small`).
+- Hash embeddings remain available only when `RESEARCH_ALLOW_HASH_EMBEDDINGS=true` is set explicitly for dev/test.
 
 ## ChatGPT Actions
 - Setup guide: `docs/chatgpt_actions_setup.md`
@@ -110,8 +119,8 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
   - `codex mcp add context-api-research-ops -- python C:\path\to\context_api\scripts\run_mcp_ops_bridge.py --transport stdio`
 
 ## Quick commands
-- Setup: `cp .env.example .env`
-- Run: `docker compose up --build`
+- Setup: `python scripts/sync_runtime_env.py` or `cp .env.example .env`
+- Run: `make up`
 - Tests: `docker compose run --rm api pytest`
 - Smoke loop (PowerShell): `powershell -ExecutionPolicy Bypass -File scripts/bootstrap_smoke.ps1 -BaseUrl http://localhost:8001 -Token change-me -TopicKey smoke_topic -FeedUrl https://example.com/feed`
 
@@ -130,4 +139,9 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 - `http://context-api.localhost`
 - `docs/current_state.md` (authoritative)
 - `docs/edge_integration.md`
+
+## Runtime alignment
+- `scripts/sync_runtime_env.py` copies the Brain OS bearer token, OpenAI key, embedding config, and persistent Postgres path from `../brain_os/.env` into `context_api/.env`.
+- `make dev` and `make up` run that sync step first, then launch Docker with `--env-file .env`.
+- The API refuses to start when `CONTEXT_API_EXPECT_PERSISTENT_CORPUS=true` and the connected corpus is unexpectedly small. This prevents silently booting against a fresh empty local Postgres volume.
 

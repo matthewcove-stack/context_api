@@ -7,13 +7,29 @@ import sqlalchemy as sa
 
 
 @pytest.fixture(autouse=True)
+def configure_research_embedding_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RESEARCH_EMBEDDING_MODEL", os.environ.get("RESEARCH_EMBEDDING_MODEL", "hash-64"))
+    monkeypatch.setenv("RESEARCH_ALLOW_HASH_EMBEDDINGS", os.environ.get("RESEARCH_ALLOW_HASH_EMBEDDINGS", "true"))
+
+
+@pytest.fixture(autouse=True)
 def reset_database() -> None:
-    engine = sa.create_engine(os.environ["DATABASE_URL"], future=True)
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        return
+    allow_reset = os.environ.get("CONTEXT_API_TEST_ALLOW_DB_RESET", "").strip().lower() in {"1", "true", "yes"}
+    lowered_url = database_url.lower()
+    if not allow_reset and all(token not in lowered_url for token in ("_test", "test_", "/test", "localhost:5543")):
+        return
+    engine = sa.create_engine(database_url, future=True)
     with engine.begin() as conn:
         conn.execute(
             sa.text(
                 """
                 TRUNCATE
+                    research_digest_feedback,
+                    research_decision_feedback,
+                    research_document_insights,
                     research_retrieval_feedback,
                     research_bootstrap_events,
                     research_relevance_scores,

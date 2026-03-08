@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Optional
 
 import hashlib
+import re
 import uuid
+from collections import Counter
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from sqlalchemy import Engine, create_engine, select, text
@@ -14,6 +16,10 @@ from app.storage.schema import (
     intel_articles,
     intel_ingest_jobs,
     projects,
+    research_decision_feedback,
+    research_digest_feedback,
+    research_document_insights,
+    research_evidence_relations,
     research_documents,
     research_chunks,
     research_bootstrap_events,
@@ -26,6 +32,17 @@ from app.storage.schema import (
     research_sources,
     tasks,
 )
+
+
+def _list_text(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    items: List[str] = []
+    for item in value:
+        text_value = str(item).strip()
+        if text_value:
+            items.append(text_value)
+    return items
 
 
 def create_db_engine(database_url: str) -> Engine:
@@ -631,6 +648,9 @@ def upsert_research_source(
     base_url_canonical: str,
     enabled: bool,
     tags: List[str],
+    publisher_type: str,
+    source_class: str,
+    default_decision_domains: List[str],
     poll_interval_minutes: int,
     rate_limit_per_hour: int,
     robots_mode: str,
@@ -651,6 +671,9 @@ def upsert_research_source(
                 "base_url_canonical": base_url_canonical,
                 "enabled": enabled,
                 "tags": tags,
+                "publisher_type": publisher_type,
+                "source_class": source_class,
+                "default_decision_domains": default_decision_domains,
             }
         )
         source_stmt = source_stmt.on_conflict_do_update(
@@ -663,6 +686,9 @@ def upsert_research_source(
                 "base_url_canonical": source_stmt.excluded.base_url_canonical,
                 "enabled": source_stmt.excluded.enabled,
                 "tags": source_stmt.excluded.tags,
+                "publisher_type": source_stmt.excluded.publisher_type,
+                "source_class": source_stmt.excluded.source_class,
+                "default_decision_domains": source_stmt.excluded.default_decision_domains,
                 "updated_at": text("now()"),
             },
         )
@@ -1043,7 +1069,9 @@ def mark_research_document_fetched(
     raw_payload: str,
     content_hash: str,
     fetch_meta: Dict[str, Any],
+    published_at: Optional[Any] = None,
 ) -> None:
+    normalized_published_at = published_at if published_at not in {"", "null", "None"} else None
     with engine.begin() as conn:
         conn.execute(
             research_documents.update()
@@ -1053,6 +1081,7 @@ def mark_research_document_fetched(
                 raw_payload=raw_payload,
                 content_hash=content_hash,
                 fetch_meta=fetch_meta,
+                published_at=normalized_published_at,
                 status="fetched",
                 fetched_at=text("now()"),
                 updated_at=text("now()"),
@@ -1067,7 +1096,9 @@ def mark_research_document_extracted(
     extracted_text: str,
     extraction_meta: Dict[str, Any],
     published_at: Optional[Any] = None,
+    summary_short: Optional[str] = None,
 ) -> None:
+    normalized_published_at = published_at if published_at not in {"", "null", "None"} else None
     with engine.begin() as conn:
         conn.execute(
             research_documents.update()
@@ -1075,12 +1106,147 @@ def mark_research_document_extracted(
             .values(
                 extracted_text=extracted_text,
                 extraction_meta=extraction_meta,
-                published_at=published_at,
+                published_at=normalized_published_at,
+                summary_short=summary_short if summary_short is not None else extracted_text[:320],
                 status="extracted",
                 extracted_at=text("now()"),
                 updated_at=text("now()"),
             )
         )
+
+
+def mark_research_document_enriched(
+    engine: Engine,
+    *,
+    document_id: str,
+    enrichment: Dict[str, Any],
+) -> None:
+    allowed = {
+        "content_type",
+        "publisher_type",
+        "source_class",
+        "summary_short",
+        "why_it_matters",
+        "topic_tags",
+        "entity_tags",
+        "use_case_tags",
+        "decision_domains",
+        "quality_signals",
+        "metrics",
+        "notable_quotes",
+        "key_claims",
+        "tradeoffs",
+        "recommendations",
+        "novelty_score",
+        "evidence_density_score",
+        "document_signal_score",
+        "embedding_ready",
+        "published_at_confidence",
+        "enrichment_meta",
+        "quality_signals",
+    }
+    values = {key: enrichment[key] for key in allowed if key in enrichment}
+    values["status"] = "enriched"
+    values["updated_at"] = text("now()")
+    with engine.begin() as conn:
+        conn.execute(
+            research_documents.update()
+            .where(research_documents.c.document_id == document_id)
+            .values(**values)
+        )
+
+
+def replace_research_document_insights(
+    engine: Engine,
+    *,
+    document_id: str,
+    insights: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for insight in insights:
+        text_value = str(insight.get("text") or "").strip()
+        chunk_id = str(insight.get("chunk_id") or "").strip()
+        insight_type = str(insight.get("insight_type") or "").strip()
+        if not text_value or not chunk_id or not insight_type:
+            continue
+        rows.append(
+            {
+                "insight_id": uuid.uuid4(),
+                "document_id": document_id,
+                "chunk_id": chunk_id,
+                "insight_type": insight_type,
+                "text": text_value,
+                "normalized_payload": insight.get("normalized_payload") or {},
+                "topic_tags": insight.get("topic_tags") or [],
+                "entity_tags": insight.get("entity_tags") or [],
+                "problem_tags": insight.get("problem_tags") or [],
+                "intervention_tags": insight.get("intervention_tags") or [],
+                "tradeoff_dimensions": insight.get("tradeoff_dimensions") or [],
+                "decision_domains": insight.get("decision_domains") or [],
+                "source_class": str(insight.get("source_class") or "external_commentary"),
+                "publisher_type": str(insight.get("publisher_type") or "independent"),
+                "confidence": float(insight.get("confidence") or 0.0),
+                "evidence_strength": float(insight.get("evidence_strength") or 0.0),
+                "freshness_score": float(insight.get("freshness_score") or 0.0),
+                "applicability_conditions": insight.get("applicability_conditions") or [],
+                "source_trust_tier": float(insight.get("source_trust_tier") or 0.0),
+                "corroboration_count": int(insight.get("corroboration_count") or 0),
+                "contradiction_count": int(insight.get("contradiction_count") or 0),
+                "coverage_score": float(insight.get("coverage_score") or 0.0),
+                "internal_coverage_score": float(insight.get("internal_coverage_score") or 0.0),
+                "external_coverage_score": float(insight.get("external_coverage_score") or 0.0),
+                "evidence_quality": float(insight.get("evidence_quality") or 0.0),
+                "staleness_flag": bool(insight.get("staleness_flag") or False),
+                "superseded_flag": bool(insight.get("superseded_flag") or False),
+            }
+        )
+    with engine.begin() as conn:
+        conn.execute(
+            research_document_insights.delete().where(research_document_insights.c.document_id == document_id)
+        )
+        if rows:
+            conn.execute(research_document_insights.insert(), rows)
+    return rows
+
+
+def replace_research_evidence_relations(
+    engine: Engine,
+    *,
+    relations: List[Dict[str, Any]],
+) -> int:
+    relation_rows: List[Dict[str, Any]] = []
+    touched_ids: set[uuid.UUID] = set()
+    for relation in relations:
+        from_id = relation.get("from_insight_id")
+        to_id = relation.get("to_insight_id")
+        relation_type = str(relation.get("relation_type") or "").strip()
+        if not from_id or not to_id or not relation_type:
+            continue
+        from_uuid = from_id if isinstance(from_id, uuid.UUID) else uuid.UUID(str(from_id))
+        to_uuid = to_id if isinstance(to_id, uuid.UUID) else uuid.UUID(str(to_id))
+        touched_ids.add(from_uuid)
+        touched_ids.add(to_uuid)
+        relation_rows.append(
+            {
+                "relation_id": uuid.uuid4(),
+                "from_insight_id": from_uuid,
+                "to_insight_id": to_uuid,
+                "relation_type": relation_type,
+                "confidence": float(relation.get("confidence") or 0.0),
+                "explanation": (str(relation.get("explanation") or "").strip() or None),
+            }
+        )
+    with engine.begin() as conn:
+        if touched_ids:
+            conn.execute(
+                research_evidence_relations.delete().where(
+                    research_evidence_relations.c.from_insight_id.in_(list(touched_ids))
+                    | research_evidence_relations.c.to_insight_id.in_(list(touched_ids))
+                )
+            )
+        if relation_rows:
+            conn.execute(research_evidence_relations.insert(), relation_rows)
+    return len(relation_rows)
 
 
 def replace_research_chunks(
@@ -1102,6 +1268,7 @@ def replace_research_chunks(
                 "ordinal": int(chunk.get("ordinal") or 0),
                 "content": content,
                 "content_hash": str(chunk.get("content_hash") or ""),
+                "chunk_meta": chunk.get("chunk_meta") or {},
             }
         )
     rows.sort(key=lambda item: (item["ordinal"], item["chunk_id"]))
@@ -1317,6 +1484,17 @@ def search_research_chunks(
     query: str,
     source_ids: Optional[List[str]] = None,
     recency_days: Optional[int] = None,
+    decision_domain: Optional[str] = None,
+    content_types: Optional[List[str]] = None,
+    source_classes: Optional[List[str]] = None,
+    publisher_types: Optional[List[str]] = None,
+    exclude_content_types: Optional[List[str]] = None,
+    evidence_types: Optional[List[str]] = None,
+    problem_tags: Optional[List[str]] = None,
+    intervention_tags: Optional[List[str]] = None,
+    tradeoff_dimensions: Optional[List[str]] = None,
+    corpus_preference: str = "mixed",
+    source_trust_min: Optional[float] = None,
     limit: int = 20,
 ) -> List[Dict[str, Any]]:
     if not query.strip():
@@ -1333,12 +1511,44 @@ def search_research_chunks(
             d.title,
             d.canonical_url,
             d.published_at,
+            d.content_type,
+            d.publisher_type,
+            d.source_class,
+            d.summary_short,
+            d.why_it_matters,
+            d.topic_tags,
+            d.decision_domains,
+            d.metrics,
+            d.notable_quotes,
+            d.tradeoffs,
+            d.recommendations,
+            d.document_signal_score,
+            d.quality_signals,
             p.source_weight,
             c.chunk_id,
             c.ordinal,
             c.content,
+            c.chunk_meta,
+            coalesce(max(i.confidence), 0.0) AS insight_confidence,
+            coalesce(max(i.evidence_quality), 0.0) AS evidence_quality,
+            coalesce(max(i.corroboration_count), 0) AS corroboration_count,
+            coalesce(max(i.contradiction_count), 0) AS contradiction_count,
+            coalesce(max(i.freshness_score), 0.0) AS freshness_score,
+            coalesce(max(i.coverage_score), 0.0) AS coverage_score,
+            coalesce(array_agg(DISTINCT tag_problem.value) FILTER (WHERE tag_problem.value IS NOT NULL), ARRAY[]::text[]) AS problem_tags,
+            coalesce(array_agg(DISTINCT tag_intervention.value) FILTER (WHERE tag_intervention.value IS NOT NULL), ARRAY[]::text[]) AS intervention_tags,
+            coalesce(array_agg(DISTINCT tag_tradeoff.value) FILTER (WHERE tag_tradeoff.value IS NOT NULL), ARRAY[]::text[]) AS tradeoff_dimensions,
             ts_rank(
-                to_tsvector('english', coalesce(c.content, '') || ' ' || coalesce(d.title, '')),
+                to_tsvector(
+                    'english',
+                    coalesce(c.content, '') || ' ' ||
+                    coalesce(d.title, '') || ' ' ||
+                    coalesce(d.summary_short, '') || ' ' ||
+                    coalesce(d.why_it_matters, '') || ' ' ||
+                    coalesce(array_to_string(ARRAY(SELECT jsonb_array_elements_text(d.topic_tags)), ' '), '') || ' ' ||
+                    coalesce(array_to_string(ARRAY(SELECT jsonb_array_elements_text(d.decision_domains)), ' '), '') || ' ' ||
+                    coalesce(string_agg(i.text, ' '), '')
+                ),
                 plainto_tsquery('english', :query)
             ) AS lexical_score,
             ts_headline(
@@ -1354,9 +1564,24 @@ def search_research_chunks(
           ON s.source_id = d.source_id
         JOIN research_source_policies p
           ON p.source_id = d.source_id
+        LEFT JOIN research_document_insights i
+          ON i.document_id = d.document_id
+         AND i.chunk_id = c.chunk_id
+        LEFT JOIN LATERAL jsonb_array_elements_text(coalesce(i.problem_tags, '[]'::jsonb)) AS tag_problem(value) ON TRUE
+        LEFT JOIN LATERAL jsonb_array_elements_text(coalesce(i.intervention_tags, '[]'::jsonb)) AS tag_intervention(value) ON TRUE
+        LEFT JOIN LATERAL jsonb_array_elements_text(coalesce(i.tradeoff_dimensions, '[]'::jsonb)) AS tag_tradeoff(value) ON TRUE
         WHERE s.topic_key = :topic_key
-          AND d.status IN ('embedded', 'extracted')
-          AND to_tsvector('english', coalesce(c.content, '') || ' ' || coalesce(d.title, ''))
+          AND d.status IN ('embedded', 'extracted', 'enriched')
+          AND to_tsvector(
+                'english',
+                coalesce(c.content, '') || ' ' ||
+                coalesce(d.title, '') || ' ' ||
+                coalesce(d.summary_short, '') || ' ' ||
+                coalesce(d.why_it_matters, '') || ' ' ||
+                coalesce(array_to_string(ARRAY(SELECT jsonb_array_elements_text(d.topic_tags)), ' '), '') || ' ' ||
+                coalesce(array_to_string(ARRAY(SELECT jsonb_array_elements_text(d.decision_domains)), ' '), '') || ' ' ||
+                coalesce(i.text, '')
+              )
               @@ plainto_tsquery('english', :query)
     """
     if source_ids:
@@ -1369,8 +1594,89 @@ def search_research_chunks(
     if recency_days is not None:
         sql += " AND coalesce(d.published_at, d.discovered_at) >= now() - (:recency_days * interval '1 day')"
         params["recency_days"] = max(recency_days, 0)
+    if decision_domain:
+        sql += " AND d.decision_domains @> CAST(:decision_domains AS jsonb)"
+        params["decision_domains"] = '["%s"]' % decision_domain.strip().lower()
+    if content_types:
+        placeholders = []
+        for idx, value in enumerate(content_types):
+            key = f"content_type_{idx}"
+            placeholders.append(f":{key}")
+            params[key] = value
+        sql += f" AND d.content_type IN ({', '.join(placeholders)})"
+    if source_classes:
+        placeholders = []
+        for idx, value in enumerate(source_classes):
+            key = f"source_class_{idx}"
+            placeholders.append(f":{key}")
+            params[key] = value
+        sql += f" AND d.source_class IN ({', '.join(placeholders)})"
+    if publisher_types:
+        placeholders = []
+        for idx, value in enumerate(publisher_types):
+            key = f"publisher_type_{idx}"
+            placeholders.append(f":{key}")
+            params[key] = value
+        sql += f" AND d.publisher_type IN ({', '.join(placeholders)})"
+    if exclude_content_types:
+        placeholders = []
+        for idx, value in enumerate(exclude_content_types):
+            key = f"exclude_content_type_{idx}"
+            placeholders.append(f":{key}")
+            params[key] = value
+        sql += f" AND d.content_type NOT IN ({', '.join(placeholders)})"
+    if evidence_types:
+        placeholders = []
+        for idx, value in enumerate(evidence_types):
+            key = f"evidence_type_{idx}"
+            placeholders.append(f":{key}")
+            params[key] = value
+        sql += f" AND i.insight_type IN ({', '.join(placeholders)})"
+    if problem_tags:
+        clauses = []
+        for idx, value in enumerate(problem_tags):
+            key = f"problem_tag_{idx}"
+            clauses.append(f"i.problem_tags @> CAST(:{key} AS jsonb)")
+            params[key] = '["%s"]' % value
+        sql += " AND (" + " OR ".join(clauses) + ")"
+    if intervention_tags:
+        clauses = []
+        for idx, value in enumerate(intervention_tags):
+            key = f"intervention_tag_{idx}"
+            clauses.append(f"i.intervention_tags @> CAST(:{key} AS jsonb)")
+            params[key] = '["%s"]' % value
+        sql += " AND (" + " OR ".join(clauses) + ")"
+    if tradeoff_dimensions:
+        clauses = []
+        for idx, value in enumerate(tradeoff_dimensions):
+            key = f"tradeoff_dimension_{idx}"
+            clauses.append(f"i.tradeoff_dimensions @> CAST(:{key} AS jsonb)")
+            params[key] = '["%s"]' % value
+        sql += " AND (" + " OR ".join(clauses) + ")"
+    if corpus_preference == "internal":
+        sql += " AND d.source_class LIKE 'internal_%'"
+    elif corpus_preference == "external":
+        sql += " AND d.source_class NOT LIKE 'internal_%'"
+    if source_trust_min is not None:
+        sql += """
+          AND (
+                CASE
+                    WHEN d.source_class = 'internal_authoritative' THEN 1.0
+                    WHEN d.source_class = 'external_primary' THEN 0.85
+                    WHEN d.source_class = 'internal_working' THEN 0.75
+                    WHEN d.source_class = 'external_secondary' THEN 0.65
+                    ELSE 0.45
+                END
+              ) >= :source_trust_min
+        """
+        params["source_trust_min"] = max(min(source_trust_min, 1.0), 0.0)
     sql += """
-        ORDER BY lexical_score DESC, coalesce(d.published_at, d.discovered_at) DESC NULLS LAST, c.ordinal ASC
+        GROUP BY
+            d.document_id, d.source_id, d.title, d.canonical_url, d.published_at, d.content_type,
+            d.publisher_type, d.source_class, d.summary_short, d.why_it_matters, d.topic_tags,
+            d.decision_domains, d.metrics, d.notable_quotes, d.tradeoffs, d.recommendations,
+            d.document_signal_score, d.quality_signals, d.discovered_at, p.source_weight, c.chunk_id, c.ordinal, c.content, c.chunk_meta
+        ORDER BY lexical_score DESC, coalesce(d.document_signal_score, 0.0) DESC, coalesce(d.published_at, d.discovered_at) DESC NULLS LAST, c.ordinal ASC
         LIMIT :limit
     """
     with engine.begin() as conn:
@@ -1391,6 +1697,7 @@ def search_research_document_chunks(
         SELECT
             c.chunk_id,
             c.ordinal,
+            c.chunk_meta,
             ts_rank(
                 to_tsvector('english', coalesce(c.content, '')),
                 plainto_tsquery('english', :query)
@@ -1414,7 +1721,309 @@ def search_research_document_chunks(
     }
     with engine.begin() as conn:
         rows = conn.execute(text(sql), params).mappings().all()
+        if not rows:
+            fallback_sql = """
+                SELECT
+                    c.chunk_id,
+                    c.ordinal,
+                    c.chunk_meta,
+                    NULL::float AS score,
+                    left(c.content, 280) AS snippet
+                FROM research_chunks c
+                WHERE c.document_id = :document_id
+                ORDER BY c.ordinal ASC
+                LIMIT :limit
+            """
+            rows = conn.execute(text(fallback_sql), params).mappings().all()
     return [dict(row) for row in rows]
+
+
+def list_research_topics(
+    engine: Engine,
+    *,
+    query: Optional[str] = None,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    params: Dict[str, Any] = {"limit": max(limit, 1)}
+    sql = """
+        SELECT
+            s.topic_key,
+            replace(initcap(replace(s.topic_key, '_', ' ')), ' Ai ', ' AI ') AS label,
+            concat('Research corpus for ', replace(s.topic_key, '_', ' '), '.') AS description,
+            count(DISTINCT s.source_id) AS source_count,
+            count(DISTINCT d.document_id) AS document_count,
+            count(DISTINCT CASE WHEN d.status = 'embedded' THEN d.document_id END) AS embedded_document_count,
+            max(d.published_at) AS last_published_at,
+            max(coalesce(d.embedded_at, d.extracted_at, d.discovered_at)) AS last_ingested_at
+        FROM research_sources s
+        LEFT JOIN research_documents d
+          ON d.source_id = s.source_id
+    """
+    if query and query.strip():
+        params["query"] = f"%{query.strip().lower()}%"
+        sql += """
+        WHERE lower(s.topic_key) LIKE :query
+           OR lower(s.name) LIKE :query
+           OR EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements_text(s.tags) AS tag
+                WHERE lower(tag) LIKE :query
+           )
+        """
+    sql += """
+        GROUP BY s.topic_key
+        ORDER BY document_count DESC, source_count DESC, s.topic_key ASC
+        LIMIT :limit
+    """
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), params).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def list_research_documents_for_topic(
+    engine: Engine,
+    *,
+    topic_key: str,
+    limit: int = 10,
+    sort: str = "recent",
+) -> List[Dict[str, Any]]:
+    order_clause = (
+        "coalesce(d.published_at, d.discovered_at) DESC NULLS LAST, d.updated_at DESC"
+        if sort != "title"
+        else "lower(coalesce(d.title, d.canonical_url)) ASC, d.updated_at DESC"
+    )
+    sql = f"""
+        SELECT
+            d.document_id,
+            d.source_id,
+            coalesce(d.title, d.canonical_url) AS title,
+            d.canonical_url,
+            d.published_at,
+            coalesce(nullif(d.summary_short, ''), left(coalesce(d.extracted_text, ''), 320)) AS summary,
+            d.content_type,
+            d.publisher_type,
+            d.source_class,
+            d.topic_tags,
+            d.decision_domains,
+            d.metrics,
+            d.notable_quotes
+        FROM research_documents d
+        JOIN research_sources s
+          ON s.source_id = d.source_id
+        WHERE s.topic_key = :topic_key
+          AND d.status IN ('embedded', 'extracted', 'enriched')
+        ORDER BY {order_clause}
+        LIMIT :limit
+    """
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), {"topic_key": topic_key, "limit": max(limit, 1)}).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def list_research_documents_for_reembed(
+    engine: Engine,
+    *,
+    topic_key: str,
+    embedding_model_id: str,
+    limit: int = 1000,
+) -> List[Dict[str, Any]]:
+    sql = """
+        SELECT
+            d.document_id,
+            d.embedding_model_id,
+            d.extracted_text
+        FROM research_documents d
+        JOIN research_sources s
+          ON s.source_id = d.source_id
+        WHERE s.topic_key = :topic_key
+          AND d.status IN ('embedded', 'extracted')
+          AND coalesce(d.extracted_text, '') <> ''
+          AND coalesce(d.embedding_model_id, '') <> :embedding_model_id
+        ORDER BY coalesce(d.embedded_at, d.extracted_at, d.discovered_at) ASC, d.document_id ASC
+        LIMIT :limit
+    """
+    params = {
+        "topic_key": topic_key,
+        "embedding_model_id": embedding_model_id,
+        "limit": max(limit, 1),
+    }
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), params).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def list_research_documents_for_enrichment_backfill(
+    engine: Engine,
+    *,
+    topic_key: Optional[str] = None,
+    limit: int = 1000,
+    only_missing_reasoning_fields: bool = True,
+) -> List[Dict[str, Any]]:
+    params: Dict[str, Any] = {"limit": max(limit, 1)}
+    sql = """
+        SELECT
+            d.document_id,
+            d.source_id,
+            d.canonical_url,
+            d.title,
+            d.extracted_text,
+            d.fetch_meta,
+            d.extraction_meta,
+            d.published_at,
+            d.status,
+            s.name AS source_name,
+            coalesce(s.publisher_type, 'independent') AS source_publisher_type,
+            coalesce(s.source_class, 'external_primary') AS source_class,
+            coalesce(s.default_decision_domains, '[]'::jsonb) AS default_decision_domains
+        FROM research_documents d
+        JOIN research_sources s
+          ON s.source_id = d.source_id
+        WHERE d.status IN ('embedded', 'extracted', 'enriched')
+          AND coalesce(d.extracted_text, '') <> ''
+    """
+    if topic_key:
+        sql += " AND s.topic_key = :topic_key"
+        params["topic_key"] = topic_key
+    if only_missing_reasoning_fields:
+        sql += """
+          AND (
+                coalesce(jsonb_array_length(d.topic_tags), 0) = 0
+                OR coalesce(jsonb_array_length(d.recommendations), 0) = 0
+                OR coalesce(jsonb_array_length(d.tradeoffs), 0) = 0
+                OR coalesce(jsonb_array_length(d.metrics), 0) = 0
+                OR coalesce(jsonb_array_length(d.notable_quotes), 0) = 0
+                OR coalesce(d.summary_short, '') = ''
+                OR coalesce(d.why_it_matters, '') = ''
+              )
+        """
+    sql += """
+        ORDER BY coalesce(d.updated_at, d.embedded_at, d.extracted_at, d.discovered_at) ASC, d.document_id ASC
+        LIMIT :limit
+    """
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), params).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def list_research_chunks_for_document(
+    engine: Engine,
+    *,
+    document_id: str,
+) -> List[Dict[str, Any]]:
+    sql = """
+        SELECT
+            chunk_id,
+            document_id,
+            ordinal,
+            content,
+            token_estimate,
+            char_count,
+            chunk_meta
+        FROM research_chunks
+        WHERE document_id = :document_id
+        ORDER BY ordinal ASC
+    """
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), {"document_id": document_id}).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def list_research_source_metrics_for_topic(
+    engine: Engine,
+    *,
+    topic_key: str,
+    limit: int = 5,
+) -> List[Dict[str, Any]]:
+    items = list_research_source_metrics(engine, topic_key=topic_key, limit=limit)
+    return items[: max(limit, 1)]
+
+
+_TOKEN_RE = re.compile(r"[a-z][a-z0-9_-]{3,}")
+_STOPWORDS = {
+    "about",
+    "after",
+    "agent",
+    "agents",
+    "architecture",
+    "article",
+    "best",
+    "current",
+    "engineering",
+    "improved",
+    "improving",
+    "management",
+    "patterns",
+    "practice",
+    "practices",
+    "product",
+    "research",
+    "software",
+    "systems",
+    "teams",
+    "using",
+    "with",
+}
+
+
+def collect_research_topic_themes(
+    engine: Engine,
+    *,
+    topic_key: str,
+    limit: int = 8,
+) -> List[Dict[str, Any]]:
+    sql = """
+        SELECT
+            d.title,
+            d.topic_tags,
+            d.decision_domains,
+            c.chunk_meta,
+            c.content
+        FROM research_documents d
+        JOIN research_sources s
+          ON s.source_id = d.source_id
+        LEFT JOIN research_chunks c
+          ON c.document_id = d.document_id
+        WHERE s.topic_key = :topic_key
+          AND d.status IN ('embedded', 'extracted', 'enriched')
+        ORDER BY coalesce(d.published_at, d.discovered_at) DESC NULLS LAST, c.ordinal ASC
+        LIMIT 200
+    """
+    counts: Counter[str] = Counter()
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), {"topic_key": topic_key}).mappings().all()
+    for row in rows:
+        for tag in _list_text(row.get("topic_tags")) + _list_text(row.get("decision_domains")):
+            normalized = tag.strip().lower()
+            if normalized and normalized not in _STOPWORDS:
+                counts[normalized] += 4
+        chunk_meta = row.get("chunk_meta") or {}
+        if isinstance(chunk_meta, dict):
+            for heading in chunk_meta.get("heading_path") or []:
+                normalized = str(heading).strip().lower()
+                if normalized and normalized not in _STOPWORDS:
+                    counts[normalized] += 3
+            for tag in chunk_meta.get("tags") or []:
+                normalized = str(tag).strip().lower()
+                if normalized and normalized not in _STOPWORDS:
+                    counts[normalized] += 2
+        for field in (row.get("title"), row.get("content")):
+            for token in _TOKEN_RE.findall(str(field or "").lower()):
+                if token not in _STOPWORDS:
+                    counts[token] += 1
+    return [{"name": name.replace("_", " "), "score": float(score)} for name, score in counts.most_common(max(limit, 1))]
+
+
+def get_research_topic_detail(
+    engine: Engine,
+    *,
+    topic_key: str,
+) -> Optional[Dict[str, Any]]:
+    items = list_research_topics(engine, query=topic_key, limit=20)
+    normalized = topic_key.strip().lower()
+    for item in items:
+        if str(item.get("topic_key") or "").strip().lower() == normalized:
+            return item
+    return None
 
 
 def create_research_query_log(
@@ -1476,6 +2085,209 @@ def list_research_embeddings_for_documents(
     )
     with engine.begin() as conn:
         rows = conn.execute(stmt).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def list_research_document_insights(
+    engine: Engine,
+    *,
+    document_ids: Optional[List[str]] = None,
+    topic_key: Optional[str] = None,
+    decision_domain: Optional[str] = None,
+    insight_types: Optional[List[str]] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    params: Dict[str, Any] = {"limit": max(limit, 1)}
+    sql = """
+        SELECT
+            i.*,
+            d.topic_tags,
+            d.decision_domains,
+            d.source_id,
+            d.title,
+            d.canonical_url,
+            d.summary_short,
+            d.why_it_matters,
+            d.published_at,
+            d.content_type,
+            d.publisher_type,
+            d.source_class
+        FROM research_document_insights i
+        JOIN research_documents d
+          ON d.document_id = i.document_id
+        JOIN research_sources s
+          ON s.source_id = d.source_id
+        WHERE 1 = 1
+    """
+    if topic_key:
+        sql += " AND s.topic_key = :topic_key"
+        params["topic_key"] = topic_key
+    if document_ids:
+        placeholders = []
+        for idx, value in enumerate(document_ids):
+            key = f"document_id_{idx}"
+            placeholders.append(f":{key}")
+            params[key] = value
+        sql += f" AND i.document_id IN ({', '.join(placeholders)})"
+    if decision_domain:
+        sql += " AND d.decision_domains @> CAST(:decision_domains AS jsonb)"
+        params["decision_domains"] = '["%s"]' % decision_domain.strip().lower()
+    if insight_types:
+        placeholders = []
+        for idx, value in enumerate(insight_types):
+            key = f"insight_type_{idx}"
+            placeholders.append(f":{key}")
+            params[key] = value
+        sql += f" AND i.insight_type IN ({', '.join(placeholders)})"
+    sql += " ORDER BY i.confidence DESC, d.published_at DESC NULLS LAST, i.created_at DESC LIMIT :limit"
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), params).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def search_research_evidence(
+    engine: Engine,
+    *,
+    topic_key: str,
+    query: str,
+    evidence_types: Optional[List[str]] = None,
+    problem_tags: Optional[List[str]] = None,
+    intervention_tags: Optional[List[str]] = None,
+    tradeoff_dimensions: Optional[List[str]] = None,
+    decision_domain: Optional[str] = None,
+    corpus_preference: str = "mixed",
+    source_trust_min: Optional[float] = None,
+    recency_days: Optional[int] = None,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    if not query.strip():
+        return []
+    rows = search_research_chunks(
+        engine,
+        topic_key=topic_key,
+        query=query,
+        recency_days=recency_days,
+        decision_domain=decision_domain,
+        evidence_types=evidence_types,
+        problem_tags=problem_tags,
+        intervention_tags=intervention_tags,
+        tradeoff_dimensions=tradeoff_dimensions,
+        corpus_preference=corpus_preference,
+        source_trust_min=source_trust_min,
+        limit=max(limit * 3, 10),
+    )
+    document_ids = sorted({str(row.get("document_id") or "") for row in rows if row.get("document_id")})
+    insights = list_research_document_insights(
+        engine,
+        document_ids=document_ids or None,
+        topic_key=topic_key,
+        decision_domain=decision_domain,
+        insight_types=evidence_types,
+        limit=max(limit * 8, 25),
+    )
+    if not insights:
+        return []
+    scored: List[Dict[str, Any]] = []
+    row_index: Dict[tuple[str, str], Dict[str, Any]] = {
+        (str(row.get("document_id") or ""), str(row.get("chunk_id") or "")): row for row in rows
+    }
+    for insight in insights:
+        key = (str(insight.get("document_id") or ""), str(insight.get("chunk_id") or ""))
+        row = row_index.get(key, {})
+        merged = dict(insight)
+        merged["lexical_score"] = float(row.get("lexical_score") or 0.0)
+        merged["evidence_quality"] = float(insight.get("evidence_quality") or row.get("evidence_quality") or 0.0)
+        merged["coverage_score"] = float(insight.get("coverage_score") or row.get("coverage_score") or 0.0)
+        merged["freshness_score"] = float(insight.get("freshness_score") or row.get("freshness_score") or 0.0)
+        merged["corroboration_count"] = int(insight.get("corroboration_count") or row.get("corroboration_count") or 0)
+        merged["contradiction_count"] = int(insight.get("contradiction_count") or row.get("contradiction_count") or 0)
+        scored.append(merged)
+    scored.sort(
+        key=lambda item: (
+            float(item.get("evidence_quality") or 0.0),
+            float(item.get("confidence") or 0.0),
+            float(item.get("lexical_score") or 0.0),
+            float(item.get("freshness_score") or 0.0),
+        ),
+        reverse=True,
+    )
+    return scored[: max(limit, 1)]
+
+
+def list_research_evidence_relations(
+    engine: Engine,
+    *,
+    insight_ids: List[str],
+    relation_types: Optional[List[str]] = None,
+    direction: str = "both",
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    if not insight_ids:
+        return []
+    params: Dict[str, Any] = {"limit": max(limit, 1)}
+    placeholders = []
+    for idx, insight_id in enumerate(insight_ids):
+        key = f"insight_id_{idx}"
+        placeholders.append(f":{key}")
+        params[key] = insight_id
+    sql = """
+        SELECT *
+        FROM research_evidence_relations
+        WHERE
+    """
+    if direction == "outgoing":
+        sql += f" from_insight_id IN ({', '.join(placeholders)})"
+    elif direction == "incoming":
+        sql += f" to_insight_id IN ({', '.join(placeholders)})"
+    else:
+        sql += f" (from_insight_id IN ({', '.join(placeholders)}) OR to_insight_id IN ({', '.join(placeholders)}))"
+        for idx, insight_id in enumerate(insight_ids):
+            params[f"insight_id_{idx + len(insight_ids)}"] = insight_id
+    if relation_types:
+        rel_placeholders = []
+        for idx, relation_type in enumerate(relation_types):
+            key = f"relation_type_{idx}"
+            rel_placeholders.append(f":{key}")
+            params[key] = relation_type
+        sql += f" AND relation_type IN ({', '.join(rel_placeholders)})"
+    sql += " ORDER BY confidence DESC, created_at DESC LIMIT :limit"
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), params).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def list_recent_research_documents(
+    engine: Engine,
+    *,
+    topic_key: str,
+    days: int,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    sql = """
+        SELECT
+            d.document_id,
+            d.source_id,
+            d.title,
+            d.canonical_url,
+            d.published_at,
+            d.summary_short,
+            d.why_it_matters,
+            d.metrics,
+            d.notable_quotes,
+            d.topic_tags,
+            d.decision_domains,
+            d.content_type
+        FROM research_documents d
+        JOIN research_sources s
+          ON s.source_id = d.source_id
+        WHERE s.topic_key = :topic_key
+          AND d.status IN ('embedded', 'extracted', 'enriched')
+          AND coalesce(d.published_at, d.discovered_at) >= now() - (:days * interval '1 day')
+        ORDER BY coalesce(d.published_at, d.discovered_at) DESC NULLS LAST, d.document_signal_score DESC, d.updated_at DESC
+        LIMIT :limit
+    """
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), {"topic_key": topic_key, "days": max(days, 1), "limit": max(limit, 1)}).mappings().all()
     return [dict(row) for row in rows]
 
 
@@ -1706,6 +2518,174 @@ def list_research_document_stage_counts(
     with engine.begin() as conn:
         rows = conn.execute(text(sql), {"topic_key": topic_key}).mappings().all()
     return [dict(row) for row in rows]
+
+
+def get_research_storage_usage(
+    engine: Engine,
+    *,
+    topic_key: str,
+) -> Dict[str, Any]:
+    sql = """
+        WITH docs AS (
+            SELECT
+                d.document_id,
+                d.raw_payload,
+                d.extracted_text
+            FROM research_documents d
+            JOIN research_sources s
+              ON s.source_id = d.source_id
+            WHERE s.topic_key = :topic_key
+        ),
+        chunks AS (
+            SELECT
+                c.document_id,
+                c.chunk_id,
+                c.content
+            FROM research_chunks c
+            JOIN docs d
+              ON d.document_id = c.document_id
+        ),
+        embs AS (
+            SELECT
+                e.document_id,
+                e.chunk_id,
+                e.vector
+            FROM research_embeddings e
+            JOIN docs d
+              ON d.document_id = e.document_id
+        )
+        SELECT
+            (SELECT count(*) FROM docs) AS documents_count,
+            (SELECT count(*) FROM chunks) AS chunks_count,
+            (SELECT count(*) FROM embs) AS embeddings_count,
+            (SELECT COALESCE(sum(octet_length(COALESCE(raw_payload, ''))), 0) FROM docs) AS raw_payload_bytes,
+            (SELECT COALESCE(sum(octet_length(COALESCE(extracted_text, ''))), 0) FROM docs) AS extracted_text_bytes,
+            (SELECT COALESCE(sum(octet_length(COALESCE(content, ''))), 0) FROM chunks) AS chunks_bytes,
+            (SELECT COALESCE(sum(pg_column_size(vector)), 0) FROM embs) AS embeddings_bytes
+    """
+    with engine.begin() as conn:
+        row = conn.execute(text(sql), {"topic_key": topic_key}).mappings().first()
+    return dict(row or {})
+
+
+def list_research_run_progress(
+    engine: Engine,
+    *,
+    topic_key: str,
+    limit: int = 10,
+) -> List[Dict[str, Any]]:
+    sql = """
+        SELECT
+            r.run_id,
+            r.trigger,
+            r.status,
+            r.created_at,
+            r.started_at,
+            r.finished_at,
+            COALESCE(jsonb_array_length(r.selected_source_ids), 0) AS sources_selected,
+            r.items_seen,
+            r.items_new,
+            r.items_deduped,
+            r.items_failed
+        FROM research_ingestion_runs r
+        WHERE r.topic_key = :topic_key
+        ORDER BY r.created_at DESC
+        LIMIT :limit
+    """
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), {"topic_key": topic_key, "limit": max(limit, 1)}).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def get_research_pipeline_counts(
+    engine: Engine,
+    *,
+    topic_key: str,
+) -> Dict[str, Any]:
+    sql = """
+        WITH docs AS (
+            SELECT
+                d.document_id,
+                d.status
+            FROM research_documents d
+            JOIN research_sources s
+              ON s.source_id = d.source_id
+            WHERE s.topic_key = :topic_key
+        )
+        SELECT
+            count(*) AS documents_total,
+            count(*) FILTER (WHERE d.status = 'discovered') AS discovered_count,
+            count(*) FILTER (WHERE d.status = 'fetched') AS fetched_count,
+            count(*) FILTER (WHERE d.status = 'extracted') AS extracted_count,
+            count(*) FILTER (WHERE d.status = 'embedded') AS embedded_count,
+            count(*) FILTER (WHERE d.status = 'failed') AS failed_count,
+            (
+                SELECT count(*)
+                FROM research_chunks c
+                JOIN docs d ON d.document_id = c.document_id
+            ) AS chunks_count,
+            (
+                SELECT count(*)
+                FROM research_embeddings e
+                JOIN docs d ON d.document_id = e.document_id
+            ) AS embeddings_count
+        FROM docs d
+    """
+    with engine.begin() as conn:
+        row = conn.execute(text(sql), {"topic_key": topic_key}).mappings().first()
+    return dict(row or {})
+
+
+def get_research_ai_usage_by_model(
+    engine: Engine,
+    *,
+    topic_key: str,
+) -> List[Dict[str, Any]]:
+    sql = """
+        WITH topic_rows AS (
+            SELECT
+                d.document_id,
+                d.embedding_model_id,
+                d.embedded_at,
+                c.content
+            FROM research_documents d
+            JOIN research_sources s
+              ON s.source_id = d.source_id
+            LEFT JOIN research_chunks c
+              ON c.document_id = d.document_id
+            WHERE s.topic_key = :topic_key
+              AND d.status = 'embedded'
+              AND d.embedding_model_id IS NOT NULL
+        )
+        SELECT
+            embedding_model_id,
+            count(DISTINCT document_id) AS documents_count,
+            count(content) AS chunks_count,
+            COALESCE(sum(CEIL(octet_length(COALESCE(content, ''))::numeric / 4.0)), 0)::bigint AS estimated_tokens_total,
+            COALESCE(
+                sum(
+                    CASE
+                        WHEN embedded_at >= now() - interval '24 hours'
+                        THEN CEIL(octet_length(COALESCE(content, ''))::numeric / 4.0)
+                        ELSE 0
+                    END
+                ),
+                0
+            )::bigint AS estimated_tokens_24h
+        FROM topic_rows
+        GROUP BY embedding_model_id
+        ORDER BY embedding_model_id ASC
+    """
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), {"topic_key": topic_key}).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def get_context_db_size_bytes(engine: Engine) -> int:
+    sql = "SELECT pg_database_size(current_database()) AS size_bytes"
+    with engine.begin() as conn:
+        row = conn.execute(text(sql)).mappings().first()
+    return int((row or {}).get("size_bytes") or 0)
 
 
 def redact_research_raw_payloads(

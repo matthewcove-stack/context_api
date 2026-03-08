@@ -3,4 +3,7 @@ entry_service: api
 entry_port: 8001
 dev_hostnames:
 - context-api.localhost
+dev_path_prefixes:
+- /v2/research
+prod_path_prefixes: []
 prod_hostnames: []

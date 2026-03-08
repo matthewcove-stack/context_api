@@ -35,6 +35,13 @@ def _dedupe_items(items: List[Dict[str, str]], *, max_items: int) -> List[Dict[s
     return deduped
 
 
+def _text_from_markup(value: str) -> str:
+    if not value:
+        return ""
+    soup = BeautifulSoup(value, "html.parser")
+    return soup.get_text(" ", strip=True)
+
+
 def discover_from_feed(raw_text: str, *, base_url: str, max_items: int) -> List[Dict[str, str]]:
     try:
         root = ElementTree.fromstring(raw_text)
@@ -46,9 +53,22 @@ def discover_from_feed(raw_text: str, *, base_url: str, max_items: int) -> List[
     for node in root.findall(".//item"):
         link = node.findtext("link") or ""
         guid = node.findtext("guid") or ""
+        title = (node.findtext("title") or "").strip()
+        description = node.findtext("description") or ""
+        content = node.findtext("{http://purl.org/rss/1.0/modules/content/}encoded") or ""
+        summary = _text_from_markup(content or description)
+        published_at = (node.findtext("pubDate") or "").strip()
         normalized = _normalize_url(base_url, unescape(link.strip()))
         if normalized:
-            items.append({"url": normalized, "external_id": guid.strip()})
+            items.append(
+                {
+                    "url": normalized,
+                    "external_id": guid.strip(),
+                    "title": _text_from_markup(title),
+                    "summary": summary,
+                    "published_at": published_at,
+                }
+            )
 
     # Atom
     ns_entry = root.findall(".//{*}entry")
@@ -63,9 +83,20 @@ def discover_from_feed(raw_text: str, *, base_url: str, max_items: int) -> List[
         if not link_url:
             link_url = entry.findtext("{*}id") or ""
         external_id = (entry.findtext("{*}id") or "").strip()
+        title = _text_from_markup(entry.findtext("{*}title") or "")
+        summary = _text_from_markup(entry.findtext("{*}summary") or entry.findtext("{*}content") or "")
+        published_at = (entry.findtext("{*}published") or entry.findtext("{*}updated") or "").strip()
         normalized = _normalize_url(base_url, unescape(link_url.strip()))
         if normalized:
-            items.append({"url": normalized, "external_id": external_id})
+            items.append(
+                {
+                    "url": normalized,
+                    "external_id": external_id,
+                    "title": title,
+                    "summary": summary,
+                    "published_at": published_at,
+                }
+            )
 
     return _dedupe_items(items, max_items=max_items)
 
@@ -76,7 +107,13 @@ def discover_from_sitemap(raw_text: str, *, base_url: str, max_items: int) -> Li
     except ElementTree.ParseError:
         return []
     items: List[Dict[str, str]] = []
+    # Standard urlset
     for node in root.findall(".//{*}url/{*}loc"):
+        normalized = _normalize_url(base_url, (node.text or "").strip())
+        if normalized:
+            items.append({"url": normalized, "external_id": ""})
+    # Sitemap index (contains nested sitemap URLs); we treat each loc as a candidate URL.
+    for node in root.findall(".//{*}sitemap/{*}loc"):
         normalized = _normalize_url(base_url, (node.text or "").strip())
         if normalized:
             items.append({"url": normalized, "external_id": ""})

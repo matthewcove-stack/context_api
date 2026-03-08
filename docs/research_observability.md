@@ -7,6 +7,8 @@ Operational dashboards and alert query references for the research ingestion and
 - `GET /v2/research/ops/summary?topic_key=...`
 - `GET /v2/research/ops/sources?topic_key=...&limit=...`
 - `GET /v2/research/ops/documents?topic_key=...`
+- `GET /v2/research/ops/storage?topic_key=...`
+- `GET /v2/research/ops/progress?topic_key=...&run_limit=...`
 - `GET /v2/research/review/queue?topic_key=...&limit=...`
 
 ## Lightweight browser dashboard

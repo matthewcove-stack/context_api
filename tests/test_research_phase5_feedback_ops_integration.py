@@ -171,6 +171,19 @@ def test_phase5_feedback_and_ops_summary() -> None:
     assert doc_items
     assert any(item["count"] >= 1 for item in doc_items)
 
+    storage = client.get(f"/v2/research/ops/storage?topic_key={topic_key}", headers=headers)
+    assert storage.status_code == 200
+    storage_payload = storage.json()
+    assert int(storage_payload["documents_count"]) >= 1
+    assert int(storage_payload["total_bytes"]) >= 1
+
+    progress = client.get(f"/v2/research/ops/progress?topic_key={topic_key}&run_limit=5", headers=headers)
+    assert progress.status_code == 200
+    progress_payload = progress.json()
+    assert int(progress_payload["chunks_count"]) >= 1
+    assert int(progress_payload["embeddings_count"]) >= 1
+    assert "runs" in progress_payload
+
     disable = client.post(f"/v2/research/sources/{source_id}/disable", headers=headers)
     assert disable.status_code == 200
     assert disable.json()["enabled"] is False

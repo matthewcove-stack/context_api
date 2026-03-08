@@ -33,8 +33,11 @@ class _RetrievalFixtureHandler(BaseHTTPRequestHandler):
             html = """
             <html><head><title>GPU Supply Watch</title></head>
             <body>
-            <p>GPU supply chain disruptions are easing this quarter.</p>
-            <p>Lead times for packaging are still elevated.</p>
+            <h1>Supply Outlook</h1>
+            <p>Teams should narrow scope and add acceptance tests when GPU supply planning starts to drift.</p>
+            <p>"Checkpoint reviews reduced regressions by 42%," according to the operations team.</p>
+            <h2>Constraints</h2>
+            <p>However, extra review checkpoints increase review cost and reduce speed when the codebase is already stable.</p>
             </body></html>
             """
             self.send_response(200)
@@ -46,7 +49,9 @@ class _RetrievalFixtureHandler(BaseHTTPRequestHandler):
             html = """
             <html><head><title>Semiconductor Capacity</title></head>
             <body>
-            <p>Semiconductor fabs report improving yields and supply.</p>
+            <h1>Operations</h1>
+            <p>Benchmark data shows fabs improved yields by 18% after teams tightened permissions and reduced context surface for planning loops.</p>
+            <p>Operators recommend a workflow with checkpoint validation because unsafe autonomy caused review gaps in the prior quarter.</p>
             </body></html>
             """
             self.send_response(200)
@@ -153,6 +158,9 @@ def test_phase4_research_retrieval_and_query_logging() -> None:
     assert first_item["document_id"]
     assert first_item["citations"]
     assert first_item["score_breakdown"]["total"] >= 0.0
+    assert "content_type" in first_item
+    assert "topic_tags" in first_item
+    assert "recommendations" in first_item
 
     chunks = client.post(
         f"/v2/research/documents/{first_item['document_id']}/chunks:search",
@@ -164,6 +172,104 @@ def test_phase4_research_retrieval_and_query_logging() -> None:
     assert chunk_items
     assert chunk_items[0]["chunk_id"]
     assert chunk_items[0]["snippet"]
+    assert "heading_path" in chunk_items[0]
+
+    topics = client.get("/v2/research/topics", headers=headers)
+    assert topics.status_code == 200
+    assert any(item["topic_key"] == topic_key for item in topics.json()["items"])
+
+    topic_detail = client.get(f"/v2/research/topics/{topic_key}", headers=headers)
+    assert topic_detail.status_code == 200
+    assert topic_detail.json()["top_themes"]
+
+    topic_docs = client.get(f"/v2/research/topics/{topic_key}/documents?limit=2", headers=headers)
+    assert topic_docs.status_code == 200
+    assert topic_docs.json()["items"]
+
+    topic_summary = client.post(
+        f"/v2/research/topics/{topic_key}/summarize",
+        json={"focus": "gpu supply chain", "max_items": 2},
+        headers=headers,
+    )
+    assert topic_summary.status_code == 200
+    assert topic_summary.json()["synthesis"]
+    assert topic_summary.json()["citations"]
+
+    decision = client.post(
+        "/v2/research/decision/pack",
+        json={
+            "query": "How should we approach GPU supply planning?",
+            "topic_key": topic_key,
+            "max_items": 2,
+        },
+        headers=headers,
+    )
+    assert decision.status_code == 200
+    decision_payload = decision.json()
+    assert decision_payload["recommended_approach"]
+    assert "supporting_evidence" in decision_payload
+
+    weekly = client.get(f"/v2/research/topics/{topic_key}/weekly?days=30&limit=2", headers=headers)
+    assert weekly.status_code == 200
+    assert "items" in weekly.json()
+
+    domain = client.get(f"/v2/research/topics/{topic_key}/domains/retrieval/summary", headers=headers)
+    assert domain.status_code == 200
+    assert "summary" in domain.json()
+
+    evidence = client.post(
+        "/v2/research/evidence/search",
+        json={
+            "query": "How do we prevent planning drift?",
+            "topic_key": topic_key,
+            "max_items": 4,
+            "evidence_types": ["recommendation", "tradeoff", "decision_pattern"],
+            "problem_tags": ["drift"],
+            "intervention_tags": ["increase_checkpoints"],
+        },
+        headers=headers,
+    )
+    assert evidence.status_code == 200
+    evidence_payload = evidence.json()
+    assert evidence_payload["items"]
+    assert any("drift" in item["problem_tags"] for item in evidence_payload["items"])
+    assert any(item["evidence_quality"] >= 0.7 for item in evidence_payload["items"])
+    first_evidence = evidence_payload["items"][0]
+    assert first_evidence["document_id"]
+    assert first_evidence["chunk_id"]
+
+    related = client.post(
+        "/v2/research/evidence/related",
+        json={
+            "query": "How do we prevent planning drift?",
+            "topic_key": topic_key,
+            "max_items": 3,
+            "evidence_types": ["recommendation", "tradeoff", "decision_pattern"],
+            "problem_tags": ["drift"],
+            "relation_intent": "supporting",
+        },
+        headers=headers,
+    )
+    assert related.status_code == 200
+    related_payload = related.json()
+    assert related_payload["seed_items"]
+    assert related_payload["relations"]
+
+    compare = client.post(
+        "/v2/research/evidence/compare",
+        json={
+            "query": "What tradeoffs matter for planning guardrails?",
+            "topic_key": topic_key,
+            "max_items": 4,
+            "evidence_types": ["recommendation", "tradeoff", "decision_pattern"],
+            "tradeoff_dimensions": ["review_cost", "speed_vs_control"],
+        },
+        headers=headers,
+    )
+    assert compare.status_code == 200
+    compare_payload = compare.json()
+    assert compare_payload["clusters"]
+    assert any(cluster["tradeoffs"] for cluster in compare_payload["clusters"])
 
     assert count_research_query_logs(engine, topic_key=topic_key) >= 1
     server.shutdown()

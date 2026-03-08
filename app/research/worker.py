@@ -11,7 +11,8 @@ from app.intel.fetch import fetch_url
 from app.intel.extract import extract_readable_text
 from app.research.chunking import chunk_document
 from app.research.discovery import discover_candidate_items, extract_title_from_html, is_allowed_by_robots
-from app.research.embeddings import embed_texts
+from app.research.embeddings import embed_texts, resolve_embedding_runtime
+from app.research.enrichment import derive_evidence_relations, enrich_chunks, enrich_document
 from app.research.ids import compute_document_id
 from app.research.pdf_extract import extract_pdf_text
 from app.storage.db import (
@@ -19,10 +20,12 @@ from app.storage.db import (
     claim_next_research_ingestion_run,
     create_db_engine,
     create_research_ingestion_run,
+    get_research_document,
     has_open_research_run_for_topic,
     list_due_research_sources,
     list_research_sources,
     mark_research_document_embedded,
+    mark_research_document_enriched,
     mark_research_document_failed,
     mark_research_document_fetched,
     mark_research_document_extracted,
@@ -30,6 +33,8 @@ from app.storage.db import (
     mark_research_source_failure,
     mark_research_source_success,
     replace_research_chunks,
+    replace_research_document_insights,
+    replace_research_evidence_relations,
     replace_research_embeddings,
     set_research_source_polled,
     update_research_run_counters,
@@ -81,6 +86,50 @@ def _throttle_source(last_request_at: float | None, *, rate_limit_per_hour: int)
     return time.monotonic()
 
 
+def _embed_existing_document(
+    engine: Any,
+    *,
+    document_id: str,
+    extracted_text: str,
+    embedding_model_id: str,
+    embedding_api_key: str,
+    chunk_max_chars: int,
+) -> None:
+    chunks = enrich_chunks(chunk_document(
+        document_id=document_id,
+        text=extracted_text,
+        max_chars=max(chunk_max_chars, 200),
+    ))
+    if not chunks:
+        raise RuntimeError("empty chunk set")
+    vectors = embed_texts(
+        texts=[str(chunk["content"]) for chunk in chunks],
+        model=embedding_model_id,
+        api_key=embedding_api_key,
+    )
+    if len(vectors) != len(chunks):
+        raise RuntimeError("embedding vector count mismatch")
+    replace_research_chunks(
+        engine,
+        document_id=document_id,
+        chunks=chunks,
+    )
+    replace_research_embeddings(
+        engine,
+        document_id=document_id,
+        embedding_model_id=embedding_model_id,
+        embeddings=[
+            {"chunk_id": str(chunk["chunk_id"]), "vector": vector}
+            for chunk, vector in zip(chunks, vectors)
+        ],
+    )
+    mark_research_document_embedded(
+        engine,
+        document_id=document_id,
+        embedding_model_id=embedding_model_id,
+    )
+
+
 def _process_source(
     engine: Any,
     *,
@@ -97,8 +146,13 @@ def _process_source(
     max_items = int(source.get("max_items_per_run") or max_items_default)
     rate_limit_per_hour = int(source.get("rate_limit_per_hour") or 30)
     chunk_max_chars = _int_env("RESEARCH_CHUNK_MAX_CHARS", 1200)
-    embedding_model_id = os.getenv("RESEARCH_EMBEDDING_MODEL", "hash-64")
+    embedding_model_id = os.getenv("RESEARCH_EMBEDDING_MODEL", "text-embedding-3-small")
     embedding_api_key = os.getenv("OPENAI_API_KEY", "")
+    embedding_runtime = resolve_embedding_runtime(model=embedding_model_id, api_key=embedding_api_key)
+    if embedding_runtime.get("warning"):
+        logger.warning("research_embedding_runtime %s", embedding_runtime["warning"])
+    reembed_budget = _int_env("RESEARCH_REEMBED_MAX_PER_RUN", 25)
+    reembedded = 0
 
     counters: Dict[str, Any] = {"seen": 0, "new": 0, "deduped": 0, "failed": 0}
     source_error = ""
@@ -127,6 +181,8 @@ def _process_source(
         if max_new_items > 0 and counters["new"] >= max_new_items:
             break
         item_url = str(item.get("url") or "").strip()
+        item_title = str(item.get("title") or "").strip()
+        item_summary = str(item.get("summary") or "").strip()
         if not item_url:
             continue
         counters["seen"] += 1
@@ -158,6 +214,40 @@ def _process_source(
         )
         if seed_state == "deduped":
             counters["deduped"] += 1
+            if reembed_budget > 0 and reembedded < reembed_budget:
+                existing = get_research_document(engine, document_id=document_id)
+                if existing:
+                    existing_text = str(existing.get("extracted_text") or "").strip()
+                    existing_model = str(existing.get("embedding_model_id") or "").strip()
+                    existing_status = str(existing.get("status") or "")
+                    if (
+                        existing_text
+                        and existing_status in {"embedded", "extracted"}
+                        and existing_model != embedding_model_id
+                    ):
+                        try:
+                            _embed_existing_document(
+                                engine,
+                                document_id=document_id,
+                                extracted_text=existing_text,
+                                embedding_model_id=embedding_model_id,
+                                embedding_api_key=embedding_api_key,
+                                chunk_max_chars=chunk_max_chars,
+                            )
+                            reembedded += 1
+                            _safe_log(
+                                "research_document_reembedded",
+                                document_id=document_id,
+                                previous_model=existing_model or "none",
+                                embedding_model_id=embedding_model_id,
+                            )
+                        except Exception as exc:
+                            counters["failed"] += 1
+                            append_research_run_error(
+                                engine,
+                                run_id=run_id,
+                                message=f"reembed_failed source_id={source_id} document_id={document_id} error={exc}",
+                            )
             continue
         if seed_state == "new":
             counters["new"] += 1
@@ -171,71 +261,125 @@ def _process_source(
         raw_payload = "" if is_pdf else str(item_fetch.get("html") or "")
         has_payload = bool(content_bytes) if is_pdf else bool(raw_payload)
         if item_status >= 400 or not has_payload:
-            counters["failed"] += 1
-            source_error = f"item_fetch_failed status={item_status}"
-            mark_research_document_failed(
+            if not item_summary:
+                counters["failed"] += 1
+                source_error = f"item_fetch_failed status={item_status}"
+                mark_research_document_failed(
+                    engine,
+                    document_id=document_id,
+                    fetch_meta={
+                        "http_status": item_status,
+                        "content_type": content_type,
+                        "error": item_fetch.get("error"),
+                    },
+                )
+                append_research_run_error(
+                    engine,
+                    run_id=run_id,
+                    message=f"item_fetch_failed source_id={source_id} status={item_status} url={item_url}",
+                )
+                continue
+
+            # Fallback for blocked fetches: ingest feed summary text so retrieval still has signal.
+            content_hash = hashlib.sha256(item_summary.encode("utf-8")).hexdigest()
+            mark_research_document_fetched(
                 engine,
                 document_id=document_id,
+                title=item_title or None,
+                raw_payload="",
+                content_hash=content_hash,
+                published_at=item.get("published_at"),
                 fetch_meta={
                     "http_status": item_status,
                     "content_type": content_type,
                     "error": item_fetch.get("error"),
+                    "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "raw_payload_stored": False,
+                    "fallback": "feed_summary",
                 },
             )
-            append_research_run_error(
-                engine,
-                run_id=run_id,
-                message=f"item_fetch_failed source_id={source_id} status={item_status} url={item_url}",
-            )
-            continue
-
-        if is_pdf:
-            content_hash = hashlib.sha256(content_bytes).hexdigest()
+            extraction = {
+                "text": item_summary,
+                "method": "feed_summary",
+                "confidence": 0.35,
+                "warnings": [f"fetch_failed_status_{item_status}"],
+                "published_at": None,
+            }
         else:
-            content_hash = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
-        mark_research_document_fetched(
-            engine,
-            document_id=document_id,
-            title=(extract_title_from_html(raw_payload) or None) if not is_pdf else None,
-            raw_payload=raw_payload,
-            content_hash=content_hash,
-            fetch_meta={
-                "http_status": item_status,
-                "content_type": content_type,
-                "etag": (item_fetch.get("headers") or {}).get("etag"),
-                "last_modified": (item_fetch.get("headers") or {}).get("last-modified"),
-                "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "binary_bytes": len(content_bytes) if is_pdf else 0,
-                "raw_payload_stored": not is_pdf,
-                "warnings": ["truncated"] if item_fetch.get("truncated") else [],
-            },
-        )
-
-        if is_pdf:
-            extraction = extract_pdf_text(content_bytes)
-            extraction["published_at"] = None
-            extraction["confidence"] = 0.6 if extraction.get("text") else 0.0
-        else:
-            extraction = extract_readable_text(raw_payload, item_url)
-        extracted_text = str(extraction.get("text") or "").strip()
-        if not extracted_text:
-            counters["failed"] += 1
-            source_error = "extraction_failed"
-            mark_research_document_failed(
+            if is_pdf:
+                content_hash = hashlib.sha256(content_bytes).hexdigest()
+            else:
+                content_hash = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
+            mark_research_document_fetched(
                 engine,
                 document_id=document_id,
+                title=(extract_title_from_html(raw_payload) or item_title or None) if not is_pdf else (item_title or None),
+                raw_payload=raw_payload,
+                content_hash=content_hash,
+                published_at=item.get("published_at"),
                 fetch_meta={
                     "http_status": item_status,
                     "content_type": content_type,
-                    "error": "empty extracted text",
+                    "etag": (item_fetch.get("headers") or {}).get("etag"),
+                    "last_modified": (item_fetch.get("headers") or {}).get("last-modified"),
+                    "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "binary_bytes": len(content_bytes) if is_pdf else 0,
+                    "raw_payload_stored": not is_pdf,
+                    "warnings": ["truncated"] if item_fetch.get("truncated") else [],
                 },
             )
-            append_research_run_error(
-                engine,
-                run_id=run_id,
-                message=f"extraction_failed source_id={source_id} url={item_url}",
-            )
-            continue
+
+            if is_pdf:
+                extraction = extract_pdf_text(content_bytes)
+                extraction["published_at"] = None
+                extraction["confidence"] = 0.6 if extraction.get("text") else 0.0
+            else:
+                extraction = extract_readable_text(raw_payload, item_url)
+        extracted_text = str(extraction.get("text") or "").strip()
+        if not extracted_text:
+            if item_summary:
+                extraction = {
+                    "text": item_summary,
+                    "method": "feed_summary",
+                    "confidence": 0.3,
+                    "warnings": ["empty_extraction_fallback_to_feed_summary"],
+                    "published_at": None,
+                }
+                extracted_text = item_summary
+                mark_research_document_fetched(
+                    engine,
+                    document_id=document_id,
+                    title=item_title or None,
+                    raw_payload="",
+                    content_hash=hashlib.sha256(item_summary.encode("utf-8")).hexdigest(),
+                    published_at=item.get("published_at"),
+                    fetch_meta={
+                        "http_status": item_status,
+                        "content_type": content_type,
+                        "error": "empty extracted text",
+                        "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "raw_payload_stored": False,
+                        "fallback": "feed_summary",
+                    },
+                )
+            else:
+                counters["failed"] += 1
+                source_error = "extraction_failed"
+                mark_research_document_failed(
+                    engine,
+                    document_id=document_id,
+                    fetch_meta={
+                        "http_status": item_status,
+                        "content_type": content_type,
+                        "error": "empty extracted text",
+                    },
+                )
+                append_research_run_error(
+                    engine,
+                    run_id=run_id,
+                    message=f"extraction_failed source_id={source_id} url={item_url}",
+                )
+                continue
         mark_research_document_extracted(
             engine,
             document_id=document_id,
@@ -245,37 +389,52 @@ def _process_source(
                 "confidence": extraction.get("confidence"),
                 "format": "pdf" if is_pdf else "html",
                 "warnings": extraction.get("warnings") or [],
+                "published_at_source": "feed" if item.get("published_at") else "",
             },
-            published_at=extraction.get("published_at"),
+            published_at=extraction.get("published_at") or item.get("published_at"),
+            summary_short=extracted_text[:320],
         )
-        chunks = chunk_document(
+        existing_doc = get_research_document(engine, document_id=document_id) or {}
+        enriched_chunks = enrich_chunks(
+            chunk_document(
+                document_id=document_id,
+                text=extracted_text,
+                max_chars=max(chunk_max_chars, 200),
+            )
+        )
+        enrichment, insights = enrich_document(
+            canonical_url=item_url,
+            source_name=str(source.get("name") or ""),
+            source_class=str(source.get("source_class") or "external_commentary"),
+            default_decision_domains=[str(value) for value in (source.get("default_decision_domains") or [])],
+            extracted_text=extracted_text,
+            chunks=enriched_chunks,
+            fetch_meta=dict(existing_doc.get("fetch_meta") or {}),
+            extraction_meta=dict(existing_doc.get("extraction_meta") or {}),
+            published_at=(extraction.get("published_at") or item.get("published_at")),
+        )
+        mark_research_document_enriched(
+            engine,
             document_id=document_id,
-            text=extracted_text,
-            max_chars=max(chunk_max_chars, 200),
+            enrichment=enrichment,
         )
-        if not chunks:
-            counters["failed"] += 1
-            source_error = "chunking_failed"
-            mark_research_document_failed(
+        insight_rows = replace_research_document_insights(
+            engine,
+            document_id=document_id,
+            insights=insights,
+        )
+        replace_research_evidence_relations(
+            engine,
+            relations=derive_evidence_relations(insight_rows),
+        )
+        try:
+            _embed_existing_document(
                 engine,
                 document_id=document_id,
-                fetch_meta={
-                    "http_status": item_status,
-                    "content_type": (item_fetch.get("headers") or {}).get("content-type"),
-                    "error": "empty chunk set",
-                },
-            )
-            append_research_run_error(
-                engine,
-                run_id=run_id,
-                message=f"chunking_failed source_id={source_id} url={item_url}",
-            )
-            continue
-        try:
-            vectors = embed_texts(
-                texts=[str(chunk["content"]) for chunk in chunks],
-                model=embedding_model_id,
-                api_key=embedding_api_key,
+                extracted_text=extracted_text,
+                embedding_model_id=embedding_model_id,
+                embedding_api_key=embedding_api_key,
+                chunk_max_chars=chunk_max_chars,
             )
         except Exception as exc:
             counters["failed"] += 1
@@ -295,44 +454,6 @@ def _process_source(
                 message=f"embedding_failed source_id={source_id} url={item_url} error={exc}",
             )
             continue
-        if len(vectors) != len(chunks):
-            counters["failed"] += 1
-            source_error = "embedding_mismatch"
-            mark_research_document_failed(
-                engine,
-                document_id=document_id,
-                fetch_meta={
-                    "http_status": item_status,
-                    "content_type": (item_fetch.get("headers") or {}).get("content-type"),
-                    "error": "embedding vector count mismatch",
-                },
-            )
-            append_research_run_error(
-                engine,
-                run_id=run_id,
-                message=f"embedding_mismatch source_id={source_id} url={item_url}",
-            )
-            continue
-
-        replace_research_chunks(
-            engine,
-            document_id=document_id,
-            chunks=chunks,
-        )
-        replace_research_embeddings(
-            engine,
-            document_id=document_id,
-            embedding_model_id=embedding_model_id,
-            embeddings=[
-                {"chunk_id": str(chunk["chunk_id"]), "vector": vector}
-                for chunk, vector in zip(chunks, vectors)
-            ],
-        )
-        mark_research_document_embedded(
-            engine,
-            document_id=document_id,
-            embedding_model_id=embedding_model_id,
-        )
 
     set_research_source_polled(engine, source_id=source_id)
     counters["source_error"] = source_error

@@ -106,6 +106,40 @@ Response:
   - `status`
   - `count`
 
+## Endpoint: `GET /v2/research/ops/storage?topic_key=...`
+
+Response:
+- `topic_key`
+- `documents_count`
+- `chunks_count`
+- `embeddings_count`
+- `raw_payload_bytes`
+- `extracted_text_bytes`
+- `chunks_bytes`
+- `embeddings_bytes`
+- `total_bytes`
+
+## Endpoint: `GET /v2/research/ops/progress?topic_key=...&run_limit=...`
+
+Response:
+- `topic_key`
+- `queued_runs`
+- `running_runs`
+- `stages` (discovered/fetched/extracted/embedded/failed)
+- `chunks_count`
+- `embeddings_count`
+- `embedding_coverage_pct`
+- `db_size_bytes`
+- `disk_total_bytes`
+- `disk_used_bytes`
+- `disk_free_bytes`
+- `disk_used_pct`
+- `ai_external_calls_estimate`
+- `ai_estimated_tokens_total`
+- `ai_estimated_tokens_24h`
+- `ai_models[]` with model-level document/chunk/token estimates
+- `runs[]` with run status, elapsed seconds, and item counters
+
 ## Endpoint: `GET /v2/research/ops/dashboard`
 
 Response:
