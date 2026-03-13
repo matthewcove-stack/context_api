@@ -68,6 +68,8 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 - `GET /v2/research/ops/dashboard` (browser UI; bearer token + default topic are bootstrapped from server config)
 - `POST /v2/research/sources/{source_id}/disable`
 - `POST /v2/research/sources/{source_id}/enable`
+- `POST /v2/research/documents/{document_id}/suppress`
+- `POST /v2/research/documents/{document_id}/unsuppress`
 - `POST /v2/research/governance/redact`
 - `GET /v2/research/review/queue?topic_key=<topic>&limit=<n>`
 
@@ -87,6 +89,11 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 - `docker compose run --rm api python -m app.research.worker --once`
 - Production retrieval quality requires `OPENAI_API_KEY` and `RESEARCH_EMBEDDING_MODEL` (default `text-embedding-3-small`).
 - Hash embeddings remain available only when `RESEARCH_ALLOW_HASH_EMBEDDINGS=true` is set explicitly for dev/test.
+
+## Research digest generator
+- Daily digest script: `python scripts/generate_daily_research_digest.py --mode daily`
+- Backfill missing days: `python scripts/generate_daily_research_digest.py --mode backfill-missing --start-date YYYY-MM-DD --end-date YYYY-MM-DD`
+- Runbook: `docs/research_digest_generator.md`
 
 ## ChatGPT Actions
 - Setup guide: `docs/chatgpt_actions_setup.md`
@@ -120,9 +127,10 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 
 ## Quick commands
 - Setup: `python scripts/sync_runtime_env.py` or `cp .env.example .env`
-- Run: `make up`
+- Run: `make up` (now always includes the edge overlay so `http://context-api.localhost` stays routed through Traefik)
 - Tests: `docker compose run --rm api pytest`
 - Smoke loop (PowerShell): `powershell -ExecutionPolicy Bypass -File scripts/bootstrap_smoke.ps1 -BaseUrl http://localhost:8001 -Token change-me -TopicKey smoke_topic -FeedUrl https://example.com/feed`
+- Warning: if you start the API with plain `docker compose -f docker-compose.yml up`, the app now logs an explicit warning that edge routing is disabled and `context-api.localhost` will not work until it is started with `compose.edge.yml`
 
 
 ## ChatGPT integration (Custom GPT + Actions)
@@ -136,6 +144,7 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 
 ## Edge Dev
 - `make dev`
+- `make up`
 - `http://context-api.localhost`
 - `docs/current_state.md` (authoritative)
 - `docs/edge_integration.md`
