@@ -668,6 +668,8 @@ def run_git_command(repo: Path, args: Sequence[str]) -> subprocess.CompletedProc
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
 
@@ -692,6 +694,8 @@ def validate_website_build(settings: DigestGeneratorSettings) -> None:
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     if result.returncode != 0:
         raise DigestGenerationError(result.stdout + "\n" + result.stderr)
