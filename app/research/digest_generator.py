@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
@@ -682,8 +683,11 @@ def validate_website_build(settings: DigestGeneratorSettings) -> None:
     if not settings.validate_build:
         return
     workdir = settings.output_repo / "apps" / "web"
+    npm_executable = shutil.which("npm.cmd") or shutil.which("npm")
+    if not npm_executable:
+        raise DigestGenerationError("Unable to find npm or npm.cmd required for website build validation")
     result = subprocess.run(
-        ["npm", "run", "build"],
+        [npm_executable, "run", "build"],
         cwd=workdir,
         check=False,
         capture_output=True,
