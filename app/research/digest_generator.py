@@ -652,7 +652,7 @@ def ensure_digest_dir(path: Path) -> None:
 
 
 def render_digest_json(digest: OutputDigest) -> str:
-    return json.dumps(digest.model_dump(mode="json"), indent=2, ensure_ascii=True) + "\n"
+    return json.dumps(digest.model_dump(mode="json", exclude_none=True), indent=2, ensure_ascii=True) + "\n"
 
 
 def write_digest_file(digest_dir: Path, digest: OutputDigest) -> Path:
