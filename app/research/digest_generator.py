@@ -224,6 +224,12 @@ class OutputDigestCta(BaseModel):
     kind: Literal["subscribe", "archive", "contact"] = "archive"
 
 
+class OutputDigestEditorial(BaseModel):
+    editorialFrame: str
+    builderImplication: str
+    watchSignal: str
+
+
 class OutputDigestItem(BaseModel):
     documentId: str
     headline: str
@@ -256,6 +262,7 @@ class OutputDigest(BaseModel):
     share: Optional[OutputDigestShare] = None
     primaryCta: Optional[OutputDigestCta] = None
     secondaryCta: Optional[OutputDigestCta] = None
+    editorial: Optional[OutputDigestEditorial] = None
     items: List[OutputDigestItem] = Field(default_factory=list)
 
 
@@ -457,6 +464,38 @@ def _join_top_points(points: Sequence[str], *, limit: int) -> str:
     if not selected:
         return ""
     return " ".join(selected)
+
+
+def _build_digest_editorial(
+    *,
+    topics: Sequence[str],
+    top_things: Sequence[str],
+    summary: str,
+    issue_summary: str,
+) -> OutputDigestEditorial:
+    primary_topic = topics[0] if topics else "recent AI system changes"
+    topic_phrase = ", ".join(topics[:3]) if topics else "recent AI system changes"
+    editorial_frame = _clean_sentence(
+        f"This issue is most useful as a decision surface for teams working on {topic_phrase}; the signal is in implementation choices, not announcement volume.",
+        minimum_words=10,
+        maximum_length=260,
+    ) or _clean_sentence(summary, minimum_words=10, maximum_length=260) or "This issue is most useful as an implementation-focused decision surface."
+    builder_implication = _clean_sentence(
+        top_things[0] if top_things else issue_summary,
+        minimum_words=6,
+        maximum_length=220,
+    ) or issue_summary
+    watch_seed = top_things[1] if len(top_things) > 1 else issue_summary
+    watch_signal = _clean_sentence(
+        f"Watch whether {primary_topic} signals keep turning into repeatable workflows, release gates, or operating constraints rather than staying as isolated demos. {watch_seed}",
+        minimum_words=12,
+        maximum_length=260,
+    ) or f"Watch whether {primary_topic} signals turn into repeatable production patterns."
+    return OutputDigestEditorial(
+        editorialFrame=editorial_frame,
+        builderImplication=builder_implication,
+        watchSignal=watch_signal,
+    )
 
 
 def _effective_timestamp_sql(alias: str = "d") -> str:
@@ -1070,6 +1109,12 @@ def build_output_digest(
             label="Browse the archive",
             href="/brief",
             kind="archive",
+        ),
+        editorial=_build_digest_editorial(
+            topics=topics,
+            top_things=cleaned_top_things,
+            summary=_clean_sentence(draft.summary, minimum_words=12, maximum_length=360) or fallback_summary,
+            issue_summary=share_description,
         ),
         items=items,
     )

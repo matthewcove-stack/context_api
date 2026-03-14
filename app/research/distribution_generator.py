@@ -10,7 +10,7 @@ from typing import Dict, Iterable, List, Literal, Optional, Sequence
 
 from pydantic import BaseModel, Field
 
-from app.research.digest_generator import OutputDigest, OutputDigestCta, OutputDigestShare, parse_date
+from app.research.digest_generator import OutputDigest, OutputDigestCta, OutputDigestEditorial, OutputDigestShare, parse_date
 
 
 DistributionMode = Literal["assets", "weekly", "all"]
@@ -57,6 +57,7 @@ class WeeklyDigest(BaseModel):
     share: OutputDigestShare
     primaryCta: OutputDigestCta
     secondaryCta: OutputDigestCta
+    editorial: OutputDigestEditorial
 
 
 @dataclass(frozen=True)
@@ -235,6 +236,7 @@ def build_weekly_digest(week_id: str, digests: Sequence[OutputDigest]) -> Weekly
         320,
     )
     issue_summary = _trim_text(" ".join(part for part in summary_parts if part), 220)
+    strongest_editorial = next((digest.editorial for digest in ordered if digest.editorial is not None), None)
     canonical_path = f"/brief/weekly/{week_id}"
     return WeeklyDigest(
         weekId=week_id,
@@ -271,6 +273,20 @@ def build_weekly_digest(week_id: str, digests: Sequence[OutputDigest]) -> Weekly
             label="Browse daily issues",
             href="/brief",
             kind="archive",
+        ),
+        editorial=OutputDigestEditorial(
+            editorialFrame=_trim_text(
+                f"This weekly layer is where the brief stops being a log of daily issues and becomes a directional read on {', '.join(top_themes[:3]) or 'the current AI engineering stack'}.",
+                240,
+            ),
+            builderImplication=_trim_text(
+                strongest_editorial.builderImplication if strongest_editorial else issue_summary or newest.issueSummary,
+                220,
+            ),
+            watchSignal=_trim_text(
+                strongest_editorial.watchSignal if strongest_editorial else f"Watch which weekly themes keep reappearing as durable operational constraints rather than one-off launches.",
+                240,
+            ),
         ),
     )
 

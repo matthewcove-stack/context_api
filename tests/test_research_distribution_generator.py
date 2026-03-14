@@ -82,3 +82,4 @@ def test_build_weekly_digests_groups_by_iso_week_and_keeps_topics() -> None:
     assert weekly[0].issues[0].date == "2026-03-12"
     assert "agents" in weekly[0].topThemes
     assert weekly[0].share.canonicalPath == "/brief/weekly/2026-W11"
+    assert weekly[0].editorial.editorialFrame

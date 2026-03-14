@@ -210,6 +210,8 @@ def test_build_output_digest_preserves_grounded_metadata() -> None:
     assert digest.primaryCta.kind == "subscribe"
     assert digest.secondaryCta is not None
     assert digest.secondaryCta.href == "/brief"
+    assert digest.editorial is not None
+    assert "implementation" in digest.editorial.editorialFrame.lower() or "decision surface" in digest.editorial.editorialFrame.lower()
 
 
 def test_determine_digest_window_rolls_forward_unpublished_gap() -> None:
