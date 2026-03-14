@@ -211,6 +211,19 @@ class OutputDigestQuote(BaseModel):
     text: str
 
 
+class OutputDigestShare(BaseModel):
+    title: str
+    description: str
+    canonicalPath: str
+    socialImage: str = "/social/lambic-ai-brief.png"
+
+
+class OutputDigestCta(BaseModel):
+    label: str
+    href: str
+    kind: Literal["subscribe", "archive", "contact"] = "archive"
+
+
 class OutputDigestItem(BaseModel):
     documentId: str
     headline: str
@@ -240,6 +253,9 @@ class OutputDigest(BaseModel):
     generatedAt: str
     generatorModel: str
     backfill: bool
+    share: Optional[OutputDigestShare] = None
+    primaryCta: Optional[OutputDigestCta] = None
+    secondaryCta: Optional[OutputDigestCta] = None
     items: List[OutputDigestItem] = Field(default_factory=list)
 
 
@@ -1020,6 +1036,12 @@ def build_output_digest(
         minimum_words=8,
         maximum_length=320,
     ) or fallback_summary
+    issue_path = f"/brief/{target_date.isoformat()}"
+    share_description = _clean_sentence(
+        draft.issue_summary,
+        minimum_words=6,
+        maximum_length=220,
+    ) or fallback_issue_summary
     return OutputDigest(
         date=target_date.isoformat(),
         windowStart=window_start.isoformat(),
@@ -1034,6 +1056,21 @@ def build_output_digest(
         generatedAt=datetime.now(timezone.utc).isoformat(),
         generatorModel=settings.model,
         backfill=backfill,
+        share=OutputDigestShare(
+            title=_clean_headline(draft.title, f"Lambic AI Brief - {target_date.isoformat()}"),
+            description=share_description,
+            canonicalPath=issue_path,
+        ),
+        primaryCta=OutputDigestCta(
+            label="Get new issues by email",
+            href="mailto:hello@lambiclabs.com?subject=Subscribe%20me%20to%20Lambic%20AI%20Brief",
+            kind="subscribe",
+        ),
+        secondaryCta=OutputDigestCta(
+            label="Browse the archive",
+            href="/brief",
+            kind="archive",
+        ),
         items=items,
     )
 

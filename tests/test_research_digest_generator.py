@@ -99,6 +99,21 @@ def test_quality_gate_rejects_low_diversity_digest() -> None:
         generatedAt="2026-03-13T00:00:00+00:00",
         generatorModel="gpt-5.2",
         backfill=False,
+        share={
+            "title": "Digest",
+            "description": "Issue summary",
+            "canonicalPath": "/brief/2026-03-12",
+        },
+        primaryCta={
+            "label": "Get new issues by email",
+            "href": "mailto:hello@lambiclabs.com?subject=Subscribe%20me%20to%20Lambic%20AI%20Brief",
+            "kind": "subscribe",
+        },
+        secondaryCta={
+            "label": "Browse the archive",
+            "href": "/brief",
+            "kind": "archive",
+        },
         items=[
             {
                 "documentId": "doc-1",
@@ -189,6 +204,12 @@ def test_build_output_digest_preserves_grounded_metadata() -> None:
     assert digest.items[0].tags == ["evals", "agents"]
     assert digest.issueSummary == "Agent systems are moving from prototypes to operational patterns."
     assert digest.topThings[0].startswith("Production-facing agent orchestration")
+    assert digest.share is not None
+    assert digest.share.canonicalPath == "/brief/2026-03-12"
+    assert digest.primaryCta is not None
+    assert digest.primaryCta.kind == "subscribe"
+    assert digest.secondaryCta is not None
+    assert digest.secondaryCta.href == "/brief"
 
 
 def test_determine_digest_window_rolls_forward_unpublished_gap() -> None:
