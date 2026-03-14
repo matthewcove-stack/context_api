@@ -264,7 +264,7 @@ def build_weekly_digest(week_id: str, digests: Sequence[OutputDigest]) -> Weekly
         ),
         primaryCta=OutputDigestCta(
             label="Get the next weekly roundup",
-            href="mailto:hello@lambiclabs.com?subject=Subscribe%20me%20to%20Lambic%20AI%20Brief",
+            href="/brief/subscribe",
             kind="subscribe",
         ),
         secondaryCta=OutputDigestCta(

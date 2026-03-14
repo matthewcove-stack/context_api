@@ -1063,7 +1063,7 @@ def build_output_digest(
         ),
         primaryCta=OutputDigestCta(
             label="Get new issues by email",
-            href="mailto:hello@lambiclabs.com?subject=Subscribe%20me%20to%20Lambic%20AI%20Brief",
+            href="/brief/subscribe",
             kind="subscribe",
         ),
         secondaryCta=OutputDigestCta(
