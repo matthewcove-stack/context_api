@@ -1,6 +1,6 @@
-# Research Digest Generator
+# Lambic AI Brief Generator
 
-This pipeline generates daily Lambic Labs research digests from the `ai_research` corpus and writes them into the website repo as static JSON artifacts.
+This pipeline generates daily Lambic AI Brief issues from the `ai_research` corpus and writes them into the website repo as static JSON artifacts.
 
 ## Entrypoint
 
@@ -35,6 +35,7 @@ Recommended defaults are defined in `.env.example`.
 ## Auto-publish behavior
 
 - The generator writes one JSON file per day into `apps/web/content/research-digests/` in the website repo.
+- Daily generation expands its window to cover any unpublished gap, so skipped low-signal days roll into the next published issue instead of creating blind spots.
 - It validates the website build before committing.
 - It commits and pushes directly to the configured website branch when generation succeeds.
 - It refuses to auto-commit if the website repo already has uncommitted changes.

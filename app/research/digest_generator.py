@@ -47,6 +47,77 @@ CONTENT_TYPE_BOOST = {
     "guide": -0.2,
 }
 
+STALE_PUBLISHED_AT_DAYS = 45
+GENERIC_TITLE_BLOCKLIST = {
+    "customers and case studies",
+    "evals",
+    "marketing sites",
+    "models",
+    "news",
+    "research",
+    "responsibility safety",
+    "science",
+    "toolkit for fueling iteration",
+}
+GENERIC_PATH_BLOCKLIST = {
+    "/",
+    "/blog/",
+    "/customers",
+    "/events/",
+    "/engineering/",
+    "/models/",
+    "/page/",
+    "/research/",
+    "/science/",
+    "/tag/",
+}
+
+EDITORIAL_CATEGORIES = (
+    "voice",
+    "infrastructure",
+    "evals",
+    "enterprise",
+    "tooling",
+    "research",
+    "open source",
+    "agents",
+)
+
+GENERIC_METRIC_NAMES = {"metric", "value", "score", "result"}
+LOW_SIGNAL_TAGS = {
+    "a",
+    "an",
+    "and",
+    "arxiv",
+    "from",
+    "like",
+    "model",
+    "models",
+    "only",
+    "papers",
+    "that",
+    "the",
+    "they",
+    "this",
+    "tool",
+    "what",
+    "which",
+    "will",
+    "with",
+    "your",
+}
+JUNK_TEXT_PATTERNS = (
+    "computer science >",
+    "done -",
+    "export default",
+    "got it",
+    "import ",
+    "node:",
+    "quick start",
+    "submitted on",
+    "title:",
+)
+
 
 @dataclass(frozen=True)
 class DigestGeneratorSettings:
@@ -114,14 +185,17 @@ class CandidateDocument:
 class DraftDigestItem(BaseModel):
     document_id: str
     headline: str
-    summary: str
+    what_happened: str
     why_it_matters: str
+    engineering_takeaway: str
 
 
 class DraftDigestContent(BaseModel):
     title: str
     intro: str
     summary: str
+    issue_summary: str
+    top_things: List[str] = Field(default_factory=list)
     items: List[DraftDigestItem] = Field(default_factory=list)
 
 
@@ -140,12 +214,14 @@ class OutputDigestQuote(BaseModel):
 class OutputDigestItem(BaseModel):
     documentId: str
     headline: str
-    summary: str
+    category: str
+    whatHappened: str
     sourceName: str
     sourceUrl: str
     publishedAt: str
     tags: List[str] = Field(default_factory=list)
     whyItMatters: str
+    engineeringTakeaway: str
     metric: Optional[OutputDigestMetric] = None
     quote: Optional[OutputDigestQuote] = None
 
@@ -157,6 +233,10 @@ class OutputDigest(BaseModel):
     title: str
     intro: str
     summary: str
+    issueSummary: str
+    topThings: List[str] = Field(default_factory=list)
+    topics: List[str] = Field(default_factory=list)
+    coverageDays: int = 1
     generatedAt: str
     generatorModel: str
     backfill: bool
@@ -182,6 +262,235 @@ def parse_date(value: str) -> date:
 def date_to_window(target_date: date) -> tuple[datetime, datetime]:
     start = datetime.combine(target_date, time.min, tzinfo=timezone.utc)
     return start, start + timedelta(days=1)
+
+
+def _normalize_whitespace(value: str) -> str:
+    compact = re.sub(r"\s+", " ", value.replace("\u2014", " - ").replace("\u2013", " - ")).strip()
+    compact = re.sub(r"\s+([,.;:?!])", r"\1", compact)
+    return compact.strip(" \"'")
+
+
+def _looks_like_low_quality_text(value: str) -> bool:
+    lowered = value.lower()
+    if any(pattern in lowered for pattern in JUNK_TEXT_PATTERNS):
+        return True
+    if "{" in value or "}" in value or "`" in value:
+        return True
+    if re.search(r"\b[a-z]+:[\\/]", lowered):
+        return True
+    if re.search(r"[A-Za-z0-9_]+\.[A-Za-z]{2,6}\b", value):
+        return True
+    return False
+
+
+def _starts_mid_sentence(value: str) -> bool:
+    for character in value:
+        if character.isalpha():
+            return character.islower()
+    return False
+
+
+def _clean_sentence(
+    value: str,
+    *,
+    minimum_words: int,
+    maximum_length: int = 320,
+) -> str:
+    cleaned = _normalize_whitespace(value)
+    if not cleaned:
+        return ""
+    if len(cleaned.split()) < minimum_words:
+        return ""
+    if len(cleaned) > maximum_length:
+        return ""
+    if _looks_like_low_quality_text(cleaned):
+        return ""
+    return cleaned
+
+
+def _clean_headline(value: str, fallback: str) -> str:
+    cleaned = _clean_sentence(value, minimum_words=4, maximum_length=160)
+    if cleaned:
+        return cleaned
+    return _clean_sentence(fallback, minimum_words=4, maximum_length=160) or _normalize_whitespace(fallback)
+
+
+def _clean_tag(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+    return slug
+
+
+def _detect_editorial_tags(candidate: CandidateDocument) -> List[str]:
+    haystack = " ".join(
+        [
+            candidate.title,
+            candidate.summary_short,
+            candidate.why_it_matters,
+            " ".join(candidate.topic_tags),
+            " ".join(candidate.decision_domains),
+            candidate.content_type,
+            candidate.source_name,
+        ]
+    ).lower()
+    tags: List[str] = []
+    mapping = {
+        "voice": ("voice", "audio", "speech", "tts", "turn-taking"),
+        "infrastructure": ("gpu", "inference", "cloud", "serving", "gateway", "chip", "compute", "deployment", "cache"),
+        "evals": ("benchmark", "arena", "eval", "leaderboard", "measure", "verification", "routing signature"),
+        "enterprise": ("enterprise", "partner", "office", "gtm", "sales", "adoption", "certification"),
+        "tooling": ("developer", "sdk", "prompt", "workflow", "parse", "tooling", "document agent", "search"),
+        "open source": ("open source", "open-source", "open data", "open model", "hugging face"),
+        "agents": ("agent", "agents", "orchestration", "tool-use", "deep researcher", "planner", "verifier"),
+        "research": ("paper", "arxiv", "study", "research"),
+    }
+    for label, keywords in mapping.items():
+        if any(keyword in haystack for keyword in keywords):
+            tags.append(label)
+    if not tags:
+        tags.append("research")
+    return tags[:3]
+
+
+def _choose_primary_category(tags: Sequence[str]) -> str:
+    for category in EDITORIAL_CATEGORIES:
+        if category in tags:
+            return category
+    return "research"
+
+
+def _clean_top_things(values: Sequence[str]) -> List[str]:
+    cleaned: List[str] = []
+    for value in values:
+        sentence = _clean_sentence(str(value or ""), minimum_words=5, maximum_length=180)
+        if sentence and sentence not in cleaned:
+            cleaned.append(sentence)
+    return cleaned[:4]
+
+
+def _normalized_comparison_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+
+
+def _is_duplicate_takeaway(why_it_matters: str, engineering_takeaway: str) -> bool:
+    why_normalized = _normalized_comparison_text(why_it_matters)
+    takeaway_normalized = _normalized_comparison_text(engineering_takeaway)
+    if not why_normalized or not takeaway_normalized:
+        return False
+    return why_normalized == takeaway_normalized
+
+
+def _fallback_engineering_takeaway(primary_category: str, candidate: CandidateDocument) -> str:
+    haystack = " ".join([candidate.title, candidate.summary_short, candidate.why_it_matters]).lower()
+    heuristic_fallbacks = (
+        (("beam", "decode", "decoding", "search"), "Add diversity-aware decoding metrics and track marginal quality gain per extra branch so search spend is tied to measurable error reduction."),
+        (("uncertainty", "epistemic", "uq"), "Localize stochasticity to the modules you can justify, then validate calibration on your own workload instead of assuming generic uncertainty methods will transfer cleanly."),
+        (("graph", "fraud", "temporal"), "Compute graph features on point-in-time snapshots only and add leakage tests to CI so offline gains do not depend on future information."),
+        (("molecular", "chemistry", "representation"), "Benchmark representation choices as an interface decision before spending on larger models or more data; encoding choice often dominates downstream behavior."),
+        (("kv-cache", "cache compression", "cache"), "Regression-test long-context behavior and late-token references when tuning cache compression so latency wins do not hide deferred quality loss."),
+        (("partner", "partner network", "certification"), "Package reference architectures, eval harnesses, and runbooks so partner-led deployments stay consistent across teams and regions."),
+        (("browsecomp", "eval awareness", "contamination", "benchmark"), "Isolate benchmark corpora, randomize tasks, and treat benchmark-recognition behavior as a failure condition in agent evaluation."),
+        (("voice", "tts", "turn-taking", "speech"), "Evaluate by dialect, speaking style, or turn-taking context instead of relying on one aggregate quality score."),
+        (("planner", "planning", "pddl"), "Keep a classical planner baseline in the loop and track cost per solved instance before defaulting to an LLM-driven planning path."),
+        (("security", "vulnerab", "firefox"), "Require reproducible proof-of-concept artifacts and maintainer-grade triage metadata before treating model-found issues as actionable."),
+    )
+    for keywords, fallback in heuristic_fallbacks:
+        if any(keyword in haystack for keyword in keywords):
+            return fallback
+    fallbacks = {
+        "agents": "Represent this as explicit workflow state with traces, tool contracts, and failure handling rather than hidden prompt behavior.",
+        "tooling": "Standardize the interface, version the dependency, and add regression coverage before relying on it in production.",
+        "infrastructure": "Benchmark the operational tradeoffs in your own stack before rollout; latency, memory, and failure modes usually matter more than headline claims.",
+        "evals": "Turn this into a repeatable evaluation or release gate so the insight is enforced operationally rather than remembered informally.",
+        "voice": "Test this on real production conditions and wire confidence-aware fallbacks into the user experience before broad rollout.",
+        "enterprise": "Isolate vendor-specific assumptions behind clear interfaces so contracts, compliance, or roadmap shifts do not force a rewrite.",
+        "research": "Treat this as an experiment candidate: reproduce the result on your own workload before promoting it into core system design.",
+        "open source": "Pin versions, review package contents, and add compatibility checks before making it part of your production path.",
+    }
+    return fallbacks.get(primary_category, fallbacks["research"])
+
+
+def _fallback_what_happened(candidate: CandidateDocument) -> str:
+    if candidate.source_name.lower().startswith("arxiv"):
+        return f"An arXiv paper titled '{candidate.title}' introduced a result relevant to production AI systems."
+    return f"{candidate.source_name} published '{candidate.title}', outlining an update relevant to teams building AI systems."
+
+
+def _fallback_why_it_matters(primary_category: str) -> str:
+    fallbacks = {
+        "agents": "Agent behavior is increasingly determined by orchestration, tool interfaces, and runtime controls rather than prompt wording alone.",
+        "tooling": "Developer-facing abstractions become leverage points quickly, so small tooling changes can materially alter reliability and operating cost.",
+        "infrastructure": "System design choices at the infra layer often dominate latency, cost, and failure behavior once models are deployed at scale.",
+        "evals": "Evaluation quality determines whether teams can distinguish real progress from benchmark noise or interface artifacts.",
+        "voice": "Voice systems fail in production on conditions that standard benchmarks often underweight, so operational validation matters.",
+        "enterprise": "Operational constraints, policy requirements, and vendor dependencies often decide whether a capability is actually deployable.",
+        "research": "Research results are most useful when translated into concrete assumptions, metrics, and rollout criteria for production workloads.",
+        "open source": "Open-source releases can move quickly into production paths, which makes versioning and compatibility discipline important.",
+    }
+    return fallbacks.get(primary_category, fallbacks["research"])
+
+
+def _quality_metric_name(value: str) -> str:
+    cleaned = _normalize_whitespace(value).lower()
+    if not cleaned or cleaned in GENERIC_METRIC_NAMES:
+        return ""
+    return cleaned.title()
+
+
+def _join_top_points(points: Sequence[str], *, limit: int) -> str:
+    selected = [point for point in points[:limit] if point]
+    if not selected:
+        return ""
+    return " ".join(selected)
+
+
+def _effective_timestamp_sql(alias: str = "d") -> str:
+    return f"""
+        CASE
+            WHEN {alias}.published_at IS NOT NULL
+             AND {alias}.discovered_at IS NOT NULL
+             AND {alias}.published_at >= {alias}.discovered_at - interval '{STALE_PUBLISHED_AT_DAYS} days'
+             AND {alias}.published_at <= {alias}.discovered_at + interval '2 days'
+            THEN {alias}.published_at
+            ELSE {alias}.discovered_at
+        END
+    """
+
+
+def _normalized_title_for_filter(title: str) -> str:
+    base = re.split(r"\s[-\u2013\u2014]\s", title, maxsplit=1)[0]
+    return re.sub(r"[^a-z0-9]+", " ", base.lower()).strip()
+
+
+def _is_low_value_candidate(candidate: CandidateDocument) -> bool:
+    normalized_title = _normalized_title_for_filter(candidate.title)
+    path = urlparse(candidate.canonical_url).path.rstrip("/") or "/"
+    lowered_path = path.lower()
+    summary_lower = candidate.summary_short.lower()
+    title_lower = candidate.title.lower()
+    if title_lower.startswith("http"):
+        return True
+    if candidate.source_name == "Import AI Newsletter" and (
+        title_lower.startswith("import ai ")
+        or "welcome to import ai" in summary_lower
+    ):
+        return True
+    if normalized_title in GENERIC_TITLE_BLOCKLIST:
+        return True
+    if lowered_path in GENERIC_PATH_BLOCKLIST:
+        return True
+    if re.fullmatch(r"/page/\d+", lowered_path):
+        return True
+    if any(fragment in lowered_path for fragment in ("/category/", "/tag/", "/events/", "/customers/", "/research-area/")):
+        return True
+    if candidate.source_name == "Google DeepMind Blog" and lowered_path.startswith(("/models/", "/research/", "/science/")):
+        return True
+    if candidate.canonical_url.rstrip("/").endswith(("/blog", "/models", "/research", "/science", "/engineering", "/events")):
+        return True
+    if any(domain in candidate.source_domain for domain in ("landing.llamaindex.ai",)):
+        return True
+    if len(candidate.summary_short.split()) < 12 and len(candidate.why_it_matters.split()) < 10:
+        return True
+    return False
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -213,8 +522,8 @@ def load_settings() -> DigestGeneratorSettings:
         database_url=database_url,
         output_repo=output_repo,
         website_content_dir=website_content_dir,
-        author_name=os.getenv("DAILY_DIGEST_AUTHOR_NAME", "Lambic Labs Research Editor").strip()
-        or "Lambic Labs Research Editor",
+        author_name=os.getenv("DAILY_DIGEST_AUTHOR_NAME", "Lambic AI Brief Editor").strip()
+        or "Lambic AI Brief Editor",
         git_remote=os.getenv("DAILY_DIGEST_GIT_REMOTE", "origin").strip() or "origin",
         git_branch=os.getenv("DAILY_DIGEST_GIT_BRANCH", "main").strip() or "main",
         backfill_start_date=parse_date(os.getenv("DAILY_DIGEST_BACKFILL_START_DATE", "").strip())
@@ -232,7 +541,7 @@ def load_settings() -> DigestGeneratorSettings:
 
 
 def parse_request(argv: Optional[Sequence[str]] = None) -> GeneratorRequest:
-    parser = argparse.ArgumentParser(description="Generate Lambic Labs daily research digests.")
+    parser = argparse.ArgumentParser(description="Generate Lambic AI Brief issues.")
     parser.add_argument("--mode", choices=["daily", "backfill-range", "backfill-missing"], default="daily")
     parser.add_argument("--date", dest="target_date")
     parser.add_argument("--start-date")
@@ -267,15 +576,16 @@ def get_existing_digest_dates(digest_dir: Path) -> set[date]:
 
 
 def get_earliest_digestable_date(engine: Engine, topic_key: str) -> Optional[date]:
+    effective_sql = _effective_timestamp_sql("d")
     sql = """
-        SELECT min(date(coalesce(d.published_at, d.discovered_at) AT TIME ZONE 'UTC')) AS earliest_date
+        SELECT min(date(({effective_sql}) AT TIME ZONE 'UTC')) AS earliest_date
         FROM research_documents d
         JOIN research_sources s
           ON s.source_id = d.source_id
         WHERE s.topic_key = :topic_key
           AND d.status IN ('embedded', 'extracted', 'enriched')
           AND coalesce(d.suppressed, false) = false
-    """
+    """.format(effective_sql=effective_sql)
     with engine.begin() as conn:
         value = conn.execute(text(sql), {"topic_key": topic_key}).scalar_one_or_none()
     if value is None:
@@ -318,6 +628,24 @@ def compute_target_dates(
     return dates
 
 
+def determine_digest_window(
+    *,
+    target_date: date,
+    existing_dates: set[date],
+    request: GeneratorRequest,
+) -> tuple[datetime, datetime]:
+    if request.mode != "daily":
+        return date_to_window(target_date)
+
+    latest_published = max((entry for entry in existing_dates if entry < target_date), default=None)
+    start_date = (latest_published + timedelta(days=1)) if latest_published else target_date
+    if start_date > target_date:
+        start_date = target_date
+    window_start = datetime.combine(start_date, time.min, tzinfo=timezone.utc)
+    window_end = datetime.combine(target_date + timedelta(days=1), time.min, tzinfo=timezone.utc)
+    return window_start, window_end
+
+
 def _clean_tag_list(values: Any) -> List[str]:
     if not isinstance(values, list):
         return []
@@ -346,6 +674,7 @@ def load_candidates_for_window(
     window_start: datetime,
     window_end: datetime,
 ) -> List[CandidateDocument]:
+    effective_sql = _effective_timestamp_sql("d")
     sql = """
         SELECT
             d.document_id,
@@ -353,8 +682,9 @@ def load_candidates_for_window(
             s.name AS source_name,
             coalesce(d.title, d.canonical_url) AS title,
             d.canonical_url,
-            coalesce(d.published_at, d.discovered_at) AS effective_at,
+            {effective_sql} AS effective_at,
             d.published_at,
+            d.discovered_at,
             coalesce(nullif(d.summary_short, ''), left(coalesce(d.extracted_text, ''), 360)) AS summary_short,
             coalesce(d.why_it_matters, '') AS why_it_matters,
             d.metrics,
@@ -373,40 +703,46 @@ def load_candidates_for_window(
         WHERE s.topic_key = :topic_key
           AND d.status IN ('embedded', 'extracted', 'enriched')
           AND coalesce(d.suppressed, false) = false
-          AND coalesce(d.published_at, d.discovered_at) >= :window_start
-          AND coalesce(d.published_at, d.discovered_at) < :window_end
-        ORDER BY coalesce(d.published_at, d.discovered_at) DESC NULLS LAST, d.document_signal_score DESC, d.updated_at DESC
-    """
+          AND {effective_sql} >= :window_start
+          AND {effective_sql} < :window_end
+        ORDER BY {effective_sql} DESC NULLS LAST, d.document_signal_score DESC, d.updated_at DESC
+    """.format(effective_sql=effective_sql)
     params = {"topic_key": topic_key, "window_start": window_start, "window_end": window_end}
     with engine.begin() as conn:
         rows = conn.execute(text(sql), params).mappings().all()
     candidates: List[CandidateDocument] = []
     for row in rows:
-        effective_at = row.get("published_at") or row.get("effective_at")
+        raw_published_at = row.get("published_at")
+        effective_at = row.get("effective_at") or row.get("published_at")
         if not isinstance(effective_at, datetime):
             continue
-        candidates.append(
-            CandidateDocument(
-                document_id=str(row.get("document_id") or ""),
-                source_id=str(row.get("source_id") or ""),
-                source_name=str(row.get("source_name") or ""),
-                title=str(row.get("title") or ""),
-                canonical_url=str(row.get("canonical_url") or ""),
-                published_at=effective_at.astimezone(timezone.utc),
-                summary_short=str(row.get("summary_short") or ""),
-                why_it_matters=str(row.get("why_it_matters") or ""),
-                metrics=_clean_mapping_list(row.get("metrics")),
-                notable_quotes=_clean_mapping_list(row.get("notable_quotes")),
-                topic_tags=_clean_tag_list(row.get("topic_tags")),
-                decision_domains=_clean_tag_list(row.get("decision_domains")),
-                content_type=str(row.get("content_type") or "company_blog"),
-                publisher_type=str(row.get("publisher_type") or "independent"),
-                source_class=str(row.get("source_class") or "external_commentary"),
-                document_signal_score=float(row.get("document_signal_score") or 0.0),
-                novelty_score=float(row.get("novelty_score") or 0.0),
-                evidence_density_score=float(row.get("evidence_density_score") or 0.0),
-            )
+        if isinstance(raw_published_at, datetime):
+            raw_published_at = raw_published_at.astimezone(timezone.utc)
+            if raw_published_at < effective_at.astimezone(timezone.utc) - timedelta(days=STALE_PUBLISHED_AT_DAYS):
+                continue
+        candidate = CandidateDocument(
+            document_id=str(row.get("document_id") or ""),
+            source_id=str(row.get("source_id") or ""),
+            source_name=str(row.get("source_name") or ""),
+            title=str(row.get("title") or ""),
+            canonical_url=str(row.get("canonical_url") or ""),
+            published_at=effective_at.astimezone(timezone.utc),
+            summary_short=str(row.get("summary_short") or ""),
+            why_it_matters=str(row.get("why_it_matters") or ""),
+            metrics=_clean_mapping_list(row.get("metrics")),
+            notable_quotes=_clean_mapping_list(row.get("notable_quotes")),
+            topic_tags=_clean_tag_list(row.get("topic_tags")),
+            decision_domains=_clean_tag_list(row.get("decision_domains")),
+            content_type=str(row.get("content_type") or "company_blog"),
+            publisher_type=str(row.get("publisher_type") or "independent"),
+            source_class=str(row.get("source_class") or "external_commentary"),
+            document_signal_score=float(row.get("document_signal_score") or 0.0),
+            novelty_score=float(row.get("novelty_score") or 0.0),
+            evidence_density_score=float(row.get("evidence_density_score") or 0.0),
         )
+        if _is_low_value_candidate(candidate):
+            continue
+        candidates.append(candidate)
     return candidates
 
 
@@ -477,11 +813,16 @@ def choose_metric(candidate: CandidateDocument) -> Optional[OutputDigestMetric]:
     if not candidate.metrics:
         return None
     top = candidate.metrics[0]
+    name = _quality_metric_name(str(top.get("name") or ""))
+    value = _normalize_whitespace(str(top.get("value") or ""))
+    if not name or not value:
+        return None
+    qualifier = _clean_sentence(str(top.get("qualifier") or ""), minimum_words=5, maximum_length=160)
     return OutputDigestMetric(
-        name=str(top.get("name") or "metric"),
-        value=str(top.get("value") or ""),
+        name=name,
+        value=value,
         unit=str(top.get("unit") or ""),
-        qualifier=str(top.get("qualifier") or ""),
+        qualifier=qualifier,
     )
 
 
@@ -489,9 +830,16 @@ def choose_quote(candidate: CandidateDocument) -> Optional[OutputDigestQuote]:
     if not candidate.notable_quotes:
         return None
     top = candidate.notable_quotes[0]
+    text = _clean_sentence(str(top.get("text") or ""), minimum_words=9, maximum_length=220)
+    if not text or _starts_mid_sentence(text):
+        return None
+    if text[-1] not in ".!?":
+        return None
+    if text.count('"') % 2 == 1:
+        return None
     return OutputDigestQuote(
-        speaker=str(top.get("speaker") or ""),
-        text=str(top.get("text") or ""),
+        speaker=_normalize_whitespace(str(top.get("speaker") or "")),
+        text=text,
     )
 
 
@@ -560,13 +908,20 @@ def write_editorial_draft(
         ],
     }
     system_prompt = (
-        "You are the Lambic Labs research editor. Return strict JSON only. "
-        "Write a concise structured digest for the website. "
+        "You are the Lambic Labs editor for the Lambic AI Brief. Return strict JSON only. "
+        "Write a concise builder-facing AI engineering digest for the website. "
         "Do not invent facts, links, metrics, or source names. "
-        "Top-level fields: title, intro, summary, items[]. "
-        "Each item must contain document_id, headline, summary, why_it_matters. "
+        "Top-level fields: title, intro, summary, issue_summary, top_things, items[]. "
+        "Each item must contain document_id, headline, what_happened, why_it_matters, engineering_takeaway. "
         "Use the supplied document_id values exactly once each. "
-        "The digest should feel editorially sharp, technical, and grounded."
+        "Keep the tone practical, technical, restrained, and useful. "
+        "Write clean standard English. Avoid hype, archive language, strained metaphors, vague filler, and awkward phrasing. "
+        "Do not echo extraction debris, navigation text, code fragments, timestamps, or partial sentences. "
+        "Prefer concrete engineering implications over generic commentary. "
+        "Do not use placeholder or generic issue titles like 'AI Brief - DATE' or 'Lambic AI Brief - DATE'; write a specific issue headline. "
+        "Make issue_summary one sharp sentence, summary two or three complete sentences, and engineering_takeaway a distinct practical implication rather than a paraphrase of why_it_matters. "
+        "Every top_things entry must be a complete sentence. "
+        "Strip newsletter numbering, site boilerplate, and article scaffolding from the prose."
     )
     user_prompt = json.dumps(payload, ensure_ascii=True)
     try:
@@ -601,28 +956,81 @@ def build_output_digest(
     items: List[OutputDigestItem] = []
     for draft_item in draft.items:
         candidate = by_id[draft_item.document_id]
-        tags = candidate.topic_tags[:4] or candidate.decision_domains[:4]
+        tags = _detect_editorial_tags(candidate)
+        primary_category = _choose_primary_category(tags)
+        what_happened = _clean_sentence(
+            draft_item.what_happened,
+            minimum_words=8,
+            maximum_length=420,
+        ) or _clean_sentence(candidate.summary_short, minimum_words=8, maximum_length=420)
+        why_it_matters = _clean_sentence(
+            draft_item.why_it_matters,
+            minimum_words=8,
+            maximum_length=420,
+        ) or _clean_sentence(candidate.why_it_matters, minimum_words=8, maximum_length=420)
+        engineering_takeaway = _clean_sentence(
+            draft_item.engineering_takeaway,
+            minimum_words=6,
+            maximum_length=260,
+        ) or why_it_matters
+        if _is_duplicate_takeaway(why_it_matters, engineering_takeaway):
+            engineering_takeaway = _fallback_engineering_takeaway(primary_category, candidate)
         items.append(
             OutputDigestItem(
                 documentId=candidate.document_id,
-                headline=draft_item.headline,
-                summary=draft_item.summary,
+                headline=_clean_headline(draft_item.headline, candidate.title),
+                category=primary_category,
+                whatHappened=what_happened or _fallback_what_happened(candidate),
                 sourceName=candidate.source_name,
                 sourceUrl=candidate.canonical_url,
                 publishedAt=candidate.published_at.isoformat(),
                 tags=tags,
-                whyItMatters=draft_item.why_it_matters,
+                whyItMatters=why_it_matters or _fallback_why_it_matters(primary_category),
+                engineeringTakeaway=engineering_takeaway,
                 metric=choose_metric(candidate),
                 quote=choose_quote(candidate),
             )
         )
+    topic_counts: Dict[str, int] = {}
+    for item in items:
+        for tag in item.tags:
+            topic_counts[tag] = topic_counts.get(tag, 0) + 1
+    topics = [
+        tag
+        for tag, _count in sorted(topic_counts.items(), key=lambda entry: (-entry[1], EDITORIAL_CATEGORIES.index(entry[0])))
+    ][:4]
+    coverage_days = max(int((window_end - window_start).total_seconds() // 86400), 1)
+    cleaned_top_things = _clean_top_things(draft.top_things)
+    fallback_issue_summary = _clean_sentence(
+        _join_top_points(cleaned_top_things, limit=1),
+        minimum_words=6,
+        maximum_length=220,
+    ) or _clean_sentence(
+        f"This issue covers {', '.join(topics[:3])} for teams building production AI systems.",
+        minimum_words=8,
+        maximum_length=220,
+    )
+    fallback_summary = _clean_sentence(
+        _join_top_points(cleaned_top_things, limit=2),
+        minimum_words=10,
+        maximum_length=360,
+    ) or fallback_issue_summary
+    fallback_intro = _clean_sentence(
+        f"This issue covers {', '.join(topics[:3])} with a focus on practical engineering implications.",
+        minimum_words=8,
+        maximum_length=320,
+    ) or fallback_summary
     return OutputDigest(
         date=target_date.isoformat(),
         windowStart=window_start.isoformat(),
         windowEnd=window_end.isoformat(),
-        title=draft.title,
-        intro=draft.intro,
-        summary=draft.summary,
+        title=_clean_headline(draft.title, f"Lambic AI Brief - {target_date.isoformat()}"),
+        intro=_clean_sentence(draft.intro, minimum_words=10, maximum_length=320) or fallback_intro,
+        summary=_clean_sentence(draft.summary, minimum_words=12, maximum_length=360) or fallback_summary,
+        issueSummary=_clean_sentence(draft.issue_summary, minimum_words=6, maximum_length=220) or fallback_issue_summary,
+        topThings=cleaned_top_things or [fallback_issue_summary, "Read the issue items for the engineering implications and source links."],
+        topics=topics,
+        coverageDays=coverage_days,
         generatedAt=datetime.now(timezone.utc).isoformat(),
         generatorModel=settings.model,
         backfill=backfill,
@@ -639,11 +1047,20 @@ def quality_gate_digest(digest: OutputDigest, *, min_items: int) -> Optional[str
     source_urls = [item.sourceUrl for item in digest.items]
     if len(set(source_urls)) != len(source_urls):
         return "duplicate source URLs"
-    if not digest.title.strip() or not digest.intro.strip() or not digest.summary.strip():
+    if not digest.title.strip() or not digest.intro.strip() or not digest.summary.strip() or not digest.issueSummary.strip():
         return "digest copy was incomplete"
+    if len(digest.topThings) < 2:
+        return "issue summary bullets were incomplete"
     for item in digest.items:
-        if not item.headline.strip() or not item.summary.strip() or not item.whyItMatters.strip():
+        if (
+            not item.headline.strip()
+            or not item.whatHappened.strip()
+            or not item.whyItMatters.strip()
+            or not item.engineeringTakeaway.strip()
+        ):
             return f"incomplete item copy for {item.documentId}"
+        if item.category not in EDITORIAL_CATEGORIES:
+            return f"invalid category for {item.documentId}"
     return None
 
 
@@ -732,7 +1149,11 @@ def generate_digest_for_day(
     if not request.force and target_date in existing_dates:
         return DayRunResult(date=target_date, status="skipped-existing", reason="digest already exists")
 
-    window_start, window_end = date_to_window(target_date)
+    window_start, window_end = determine_digest_window(
+        target_date=target_date,
+        existing_dates=existing_dates,
+        request=request,
+    )
     candidates = load_candidates_for_window(engine, topic_key=settings.topic_key, window_start=window_start, window_end=window_end)
     selected = select_distinct_candidates(
         candidates,
