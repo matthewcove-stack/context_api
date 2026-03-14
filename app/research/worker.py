@@ -13,6 +13,7 @@ from app.research.chunking import chunk_document
 from app.research.discovery import discover_candidate_items, extract_title_from_html, is_allowed_by_robots
 from app.research.embeddings import embed_texts, resolve_embedding_runtime
 from app.research.enrichment import derive_evidence_relations, enrich_chunks, enrich_document
+from app.research.hygiene import detect_junk_document
 from app.research.ids import compute_document_id
 from app.research.pdf_extract import extract_pdf_text
 from app.storage.db import (
@@ -20,6 +21,7 @@ from app.storage.db import (
     claim_next_research_ingestion_run,
     create_db_engine,
     create_research_ingestion_run,
+    fail_stale_research_ingestion_runs,
     get_research_document,
     has_open_research_run_for_topic,
     list_due_research_sources,
@@ -36,6 +38,7 @@ from app.storage.db import (
     replace_research_document_insights,
     replace_research_evidence_relations,
     replace_research_embeddings,
+    set_research_document_suppressed,
     set_research_source_polled,
     update_research_run_counters,
     upsert_research_document_seed,
@@ -52,6 +55,12 @@ def _int_env(name: str, default: int) -> int:
         return int(os.getenv(name, str(default)))
     except ValueError:
         return default
+
+
+def _strip_nul_bytes(value: str) -> str:
+    if not value:
+        return ""
+    return value.replace("\x00", "")
 
 
 def _fetch_with_retries(url: str) -> Dict[str, Any]:
@@ -258,10 +267,12 @@ def _process_source(
         content_type = str((item_fetch.get("headers") or {}).get("content-type") or "").lower()
         content_bytes = item_fetch.get("content_bytes") or b""
         is_pdf = "application/pdf" in content_type or item_url.lower().endswith(".pdf")
-        raw_payload = "" if is_pdf else str(item_fetch.get("html") or "")
+        raw_payload = "" if is_pdf else _strip_nul_bytes(str(item_fetch.get("html") or ""))
+        safe_item_title = _strip_nul_bytes(item_title)
+        safe_item_summary = _strip_nul_bytes(item_summary)
         has_payload = bool(content_bytes) if is_pdf else bool(raw_payload)
         if item_status >= 400 or not has_payload:
-            if not item_summary:
+            if not safe_item_summary:
                 counters["failed"] += 1
                 source_error = f"item_fetch_failed status={item_status}"
                 mark_research_document_failed(
@@ -281,11 +292,11 @@ def _process_source(
                 continue
 
             # Fallback for blocked fetches: ingest feed summary text so retrieval still has signal.
-            content_hash = hashlib.sha256(item_summary.encode("utf-8")).hexdigest()
+            content_hash = hashlib.sha256(safe_item_summary.encode("utf-8")).hexdigest()
             mark_research_document_fetched(
                 engine,
                 document_id=document_id,
-                title=item_title or None,
+                title=safe_item_title or None,
                 raw_payload="",
                 content_hash=content_hash,
                 published_at=item.get("published_at"),
@@ -299,7 +310,7 @@ def _process_source(
                 },
             )
             extraction = {
-                "text": item_summary,
+                "text": safe_item_summary,
                 "method": "feed_summary",
                 "confidence": 0.35,
                 "warnings": [f"fetch_failed_status_{item_status}"],
@@ -313,7 +324,7 @@ def _process_source(
             mark_research_document_fetched(
                 engine,
                 document_id=document_id,
-                title=(extract_title_from_html(raw_payload) or item_title or None) if not is_pdf else (item_title or None),
+                title=(_strip_nul_bytes(extract_title_from_html(raw_payload)) or safe_item_title or None) if not is_pdf else (safe_item_title or None),
                 raw_payload=raw_payload,
                 content_hash=content_hash,
                 published_at=item.get("published_at"),
@@ -335,23 +346,23 @@ def _process_source(
                 extraction["confidence"] = 0.6 if extraction.get("text") else 0.0
             else:
                 extraction = extract_readable_text(raw_payload, item_url)
-        extracted_text = str(extraction.get("text") or "").strip()
+        extracted_text = _strip_nul_bytes(str(extraction.get("text") or "")).strip()
         if not extracted_text:
-            if item_summary:
+            if safe_item_summary:
                 extraction = {
-                    "text": item_summary,
+                    "text": safe_item_summary,
                     "method": "feed_summary",
                     "confidence": 0.3,
                     "warnings": ["empty_extraction_fallback_to_feed_summary"],
                     "published_at": None,
                 }
-                extracted_text = item_summary
+                extracted_text = safe_item_summary
                 mark_research_document_fetched(
                     engine,
                     document_id=document_id,
-                    title=item_title or None,
+                    title=safe_item_title or None,
                     raw_payload="",
-                    content_hash=hashlib.sha256(item_summary.encode("utf-8")).hexdigest(),
+                    content_hash=hashlib.sha256(safe_item_summary.encode("utf-8")).hexdigest(),
                     published_at=item.get("published_at"),
                     fetch_meta={
                         "http_status": item_status,
@@ -380,6 +391,34 @@ def _process_source(
                     message=f"extraction_failed source_id={source_id} url={item_url}",
                 )
                 continue
+        junk_reason = detect_junk_document(
+            url=item_url,
+            title=safe_item_title or str(extract_title_from_html(raw_payload) or ""),
+            extracted_text=extracted_text,
+            item_summary=safe_item_summary,
+            fetch_status=item_status,
+            fetch_fallback=str((get_research_document(engine, document_id=document_id) or {}).get("fetch_meta", {}).get("fallback") or ""),
+        )
+        if junk_reason:
+            set_research_document_suppressed(
+                engine,
+                document_id=document_id,
+                suppressed=True,
+                reason=junk_reason,
+            )
+            append_research_run_error(
+                engine,
+                run_id=run_id,
+                message=f"document_suppressed source_id={source_id} document_id={document_id} reason={junk_reason} url={item_url}",
+            )
+            _safe_log(
+                "research_document_suppressed",
+                source_id=source_id,
+                document_id=document_id,
+                reason=junk_reason,
+                url=item_url,
+            )
+            continue
         mark_research_document_extracted(
             engine,
             document_id=document_id,
@@ -557,6 +596,10 @@ def enqueue_due_schedule_runs(engine: Any) -> int:
 
 
 def run_once(engine: Any) -> bool:
+    stale_after_seconds = _int_env("RESEARCH_RUN_STALE_AFTER_S", 300)
+    recovered = fail_stale_research_ingestion_runs(engine, stale_after_seconds=stale_after_seconds)
+    if recovered:
+        _safe_log("research_stale_runs_failed", count=recovered, stale_after_seconds=stale_after_seconds)
     run = claim_next_research_ingestion_run(engine)
     if not run:
         return False

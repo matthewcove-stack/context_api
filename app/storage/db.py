@@ -45,6 +45,16 @@ def _list_text(value: Any) -> List[str]:
     return items
 
 
+def _strip_nul_from_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, list):
+        return [_strip_nul_from_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _strip_nul_from_value(item) for key, item in value.items()}
+    return value
+
+
 def create_db_engine(database_url: str) -> Engine:
     return create_engine(database_url, pool_pre_ping=True, future=True)
 
@@ -175,6 +185,45 @@ def search_tasks(
     if status:
         stmt = stmt.where(tasks.c.status == status)
     stmt = stmt.order_by(tasks.c.title.asc()).limit(max(limit, 1) * 5)
+    with engine.begin() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def list_projects_page(
+    engine: Engine,
+    *,
+    limit: int = 200,
+) -> List[Dict[str, Any]]:
+    stmt = (
+        select(projects)
+        .order_by(projects.c.updated_at.desc().nullslast(), projects.c.name.asc())
+        .limit(max(limit, 1))
+    )
+    with engine.begin() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def list_tasks_with_projects(
+    engine: Engine,
+    *,
+    limit: int = 1000,
+    project_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    stmt = (
+        select(
+            tasks,
+            projects.c.name.label("project_name"),
+            projects.c.status.label("project_status"),
+            projects.c.updated_at.label("project_updated_at"),
+        )
+        .select_from(tasks.outerjoin(projects, tasks.c.project_id == projects.c.project_id))
+        .order_by(tasks.c.updated_at.desc().nullslast(), tasks.c.title.asc())
+        .limit(max(limit, 1))
+    )
+    if project_id:
+        stmt = stmt.where(tasks.c.project_id == project_id)
     with engine.begin() as conn:
         rows = conn.execute(stmt).mappings().all()
     return [dict(row) for row in rows]
@@ -950,6 +999,32 @@ def claim_next_research_ingestion_run(engine: Engine) -> Optional[Dict[str, Any]
         return updated
 
 
+def fail_stale_research_ingestion_runs(
+    engine: Engine,
+    *,
+    stale_after_seconds: int = 300,
+) -> int:
+    threshold = max(int(stale_after_seconds), 60)
+    sql = """
+        UPDATE research_ingestion_runs
+        SET status = 'failed',
+            finished_at = now(),
+            updated_at = now(),
+            errors = coalesce(errors, '[]'::jsonb) || jsonb_build_array(CAST(:message AS text))
+        WHERE status = 'running'
+          AND updated_at < now() - (:threshold_seconds * interval '1 second')
+    """
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(sql),
+            {
+                "threshold_seconds": threshold,
+                "message": f"run_failed error=stale_running_run idle_for_gt_{threshold}s",
+            },
+        )
+    return int(result.rowcount or 0)
+
+
 def update_research_run_counters(
     engine: Engine,
     *,
@@ -1072,15 +1147,18 @@ def mark_research_document_fetched(
     published_at: Optional[Any] = None,
 ) -> None:
     normalized_published_at = published_at if published_at not in {"", "null", "None"} else None
+    safe_title = _strip_nul_from_value(title)
+    safe_raw_payload = _strip_nul_from_value(raw_payload)
+    safe_fetch_meta = _strip_nul_from_value(fetch_meta)
     with engine.begin() as conn:
         conn.execute(
             research_documents.update()
             .where(research_documents.c.document_id == document_id)
             .values(
-                title=title,
-                raw_payload=raw_payload,
+                title=safe_title,
+                raw_payload=safe_raw_payload,
                 content_hash=content_hash,
-                fetch_meta=fetch_meta,
+                fetch_meta=safe_fetch_meta,
                 published_at=normalized_published_at,
                 status="fetched",
                 fetched_at=text("now()"),
@@ -1099,15 +1177,18 @@ def mark_research_document_extracted(
     summary_short: Optional[str] = None,
 ) -> None:
     normalized_published_at = published_at if published_at not in {"", "null", "None"} else None
+    safe_extracted_text = _strip_nul_from_value(extracted_text)
+    safe_summary = _strip_nul_from_value(summary_short)
+    safe_extraction_meta = _strip_nul_from_value(extraction_meta)
     with engine.begin() as conn:
         conn.execute(
             research_documents.update()
             .where(research_documents.c.document_id == document_id)
             .values(
-                extracted_text=extracted_text,
-                extraction_meta=extraction_meta,
+                extracted_text=safe_extracted_text,
+                extraction_meta=safe_extraction_meta,
                 published_at=normalized_published_at,
-                summary_short=summary_short if summary_short is not None else extracted_text[:320],
+                summary_short=safe_summary if safe_summary is not None else safe_extracted_text[:320],
                 status="extracted",
                 extracted_at=text("now()"),
                 updated_at=text("now()"),
@@ -1347,6 +1428,64 @@ def mark_research_document_failed(
         )
 
 
+def set_research_document_suppressed(
+    engine: Engine,
+    *,
+    document_id: str,
+    suppressed: bool,
+    reason: Optional[str] = None,
+) -> bool:
+    safe_reason = (reason or "").strip() or None
+    with engine.begin() as conn:
+        existing = conn.execute(
+            select(research_documents.c.document_id).where(research_documents.c.document_id == document_id)
+        ).first()
+        if not existing:
+            return False
+        if suppressed:
+            conn.execute(
+                research_chunks.delete().where(research_chunks.c.document_id == document_id)
+            )
+            conn.execute(
+                research_embeddings.delete().where(research_embeddings.c.document_id == document_id)
+            )
+            conn.execute(
+                research_document_insights.delete().where(research_document_insights.c.document_id == document_id)
+            )
+            conn.execute(
+                research_documents.update()
+                .where(research_documents.c.document_id == document_id)
+                .values(
+                    suppressed=True,
+                    suppression_reason=safe_reason,
+                    suppressed_at=text("now()"),
+                    embedding_ready=False,
+                    embedding_model_id=None,
+                    embedded_at=None,
+                    status="suppressed",
+                    updated_at=text("now()"),
+                )
+            )
+        else:
+            conn.execute(
+                research_documents.update()
+                .where(research_documents.c.document_id == document_id)
+                .values(
+                    suppressed=False,
+                    suppression_reason=None,
+                    suppressed_at=None,
+                    status=text(
+                        "CASE "
+                        "WHEN coalesce(extracted_text, '') <> '' THEN 'extracted' "
+                        "WHEN coalesce(raw_payload, '') <> '' THEN 'fetched' "
+                        "ELSE 'discovered' END"
+                    ),
+                    updated_at=text("now()"),
+                )
+            )
+    return True
+
+
 def get_research_document(
     engine: Engine,
     *,
@@ -1572,6 +1711,7 @@ def search_research_chunks(
         LEFT JOIN LATERAL jsonb_array_elements_text(coalesce(i.tradeoff_dimensions, '[]'::jsonb)) AS tag_tradeoff(value) ON TRUE
         WHERE s.topic_key = :topic_key
           AND d.status IN ('embedded', 'extracted', 'enriched')
+          AND coalesce(d.suppressed, false) = false
           AND to_tsvector(
                 'english',
                 coalesce(c.content, '') || ' ' ||
@@ -1709,7 +1849,10 @@ def search_research_document_chunks(
                 'MaxWords=35, MinWords=12, ShortWord=3'
             ) AS snippet
         FROM research_chunks c
+        JOIN research_documents d
+          ON d.document_id = c.document_id
         WHERE c.document_id = :document_id
+          AND coalesce(d.suppressed, false) = false
           AND to_tsvector('english', coalesce(c.content, '')) @@ plainto_tsquery('english', :query)
         ORDER BY score DESC, c.ordinal ASC
         LIMIT :limit
@@ -1730,7 +1873,10 @@ def search_research_document_chunks(
                     NULL::float AS score,
                     left(c.content, 280) AS snippet
                 FROM research_chunks c
+                JOIN research_documents d
+                  ON d.document_id = c.document_id
                 WHERE c.document_id = :document_id
+                  AND coalesce(d.suppressed, false) = false
                 ORDER BY c.ordinal ASC
                 LIMIT :limit
             """
@@ -1758,6 +1904,7 @@ def list_research_topics(
         FROM research_sources s
         LEFT JOIN research_documents d
           ON d.source_id = s.source_id
+         AND coalesce(d.suppressed, false) = false
     """
     if query and query.strip():
         params["query"] = f"%{query.strip().lower()}%"
@@ -1812,6 +1959,7 @@ def list_research_documents_for_topic(
           ON s.source_id = d.source_id
         WHERE s.topic_key = :topic_key
           AND d.status IN ('embedded', 'extracted', 'enriched')
+          AND coalesce(d.suppressed, false) = false
         ORDER BY {order_clause}
         LIMIT :limit
     """
@@ -1837,6 +1985,7 @@ def list_research_documents_for_reembed(
           ON s.source_id = d.source_id
         WHERE s.topic_key = :topic_key
           AND d.status IN ('embedded', 'extracted')
+          AND coalesce(d.suppressed, false) = false
           AND coalesce(d.extracted_text, '') <> ''
           AND coalesce(d.embedding_model_id, '') <> :embedding_model_id
         ORDER BY coalesce(d.embedded_at, d.extracted_at, d.discovered_at) ASC, d.document_id ASC
@@ -1879,6 +2028,7 @@ def list_research_documents_for_enrichment_backfill(
         JOIN research_sources s
           ON s.source_id = d.source_id
         WHERE d.status IN ('embedded', 'extracted', 'enriched')
+          AND coalesce(d.suppressed, false) = false
           AND coalesce(d.extracted_text, '') <> ''
     """
     if topic_key:
@@ -1985,6 +2135,7 @@ def collect_research_topic_themes(
           ON c.document_id = d.document_id
         WHERE s.topic_key = :topic_key
           AND d.status IN ('embedded', 'extracted', 'enriched')
+          AND coalesce(d.suppressed, false) = false
         ORDER BY coalesce(d.published_at, d.discovered_at) DESC NULLS LAST, c.ordinal ASC
         LIMIT 200
     """
@@ -2117,7 +2268,7 @@ def list_research_document_insights(
           ON d.document_id = i.document_id
         JOIN research_sources s
           ON s.source_id = d.source_id
-        WHERE 1 = 1
+        WHERE coalesce(d.suppressed, false) = false
     """
     if topic_key:
         sql += " AND s.topic_key = :topic_key"
@@ -2282,6 +2433,7 @@ def list_recent_research_documents(
           ON s.source_id = d.source_id
         WHERE s.topic_key = :topic_key
           AND d.status IN ('embedded', 'extracted', 'enriched')
+          AND coalesce(d.suppressed, false) = false
           AND coalesce(d.published_at, d.discovered_at) >= now() - (:days * interval '1 day')
         ORDER BY coalesce(d.published_at, d.discovered_at) DESC NULLS LAST, d.document_signal_score DESC, d.updated_at DESC
         LIMIT :limit
@@ -2418,6 +2570,7 @@ def get_research_ops_summary(
             FROM research_documents d
             JOIN research_sources s ON s.source_id = d.source_id
             WHERE s.topic_key = :topic_key
+              AND coalesce(d.suppressed, false) = false
         ),
         run_stats AS (
             SELECT
@@ -2655,6 +2808,7 @@ def get_research_ai_usage_by_model(
               ON c.document_id = d.document_id
             WHERE s.topic_key = :topic_key
               AND d.status = 'embedded'
+              AND coalesce(d.suppressed, false) = false
               AND d.embedding_model_id IS NOT NULL
         )
         SELECT

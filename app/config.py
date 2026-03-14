@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     context_api_token: str
     context_api_research_topic_key: str = "ai_research"
     context_postgres_data_dir: str = ""
+    edge_proxy_enabled: bool = False
     context_api_expect_persistent_corpus: bool = False
     context_api_expected_min_documents: int = 1
     version: str = "0.0.0"

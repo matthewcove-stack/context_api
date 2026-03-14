@@ -518,6 +518,13 @@ class ResearchSourceModerationResponse(BaseModel):
     status: Literal["updated"]
 
 
+class ResearchDocumentModerationResponse(BaseModel):
+    document_id: str
+    suppressed: bool
+    suppression_reason: Optional[str] = None
+    status: Literal["updated"]
+
+
 class ResearchRedactRequest(BaseModel):
     topic_key: str
     older_than_days: int = Field(default=30, ge=0, le=3650)

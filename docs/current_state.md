@@ -3,6 +3,12 @@
 ## What works today
 - FastAPI + Postgres + Alembic.
 - Authenticated `/v1` endpoints for mirrored Projects/Tasks sync + search.
+- Authenticated `/v1` dashboard endpoints for Brain OS shell reads:
+  - today dashboard
+  - upcoming tasks
+  - project workspace
+  - inbox
+  - daily and weekly reviews
 - Intel fixture ingestion and intel URL ingestion.
 - Worker-based fetch/extract/sectionise/enrich pipeline for intel articles.
 - `/v2/context/pack` and progressive disclosure endpoints over intel content.
@@ -27,8 +33,12 @@
   - Source metrics endpoint exposes per-source failure/throughput status.
   - Governance controls:
     - source moderation endpoints (`enable`/`disable`)
+    - document suppression endpoints (`suppress`/`unsuppress`)
     - redaction endpoint for raw payload retention hygiene
     - review queue endpoint for operator triage
+  - Ingest-time junk suppression:
+    - obvious login/pricing/sitemap/press-kit pages are suppressed before enrichment/embedding
+    - suppressed documents are excluded from retrieval, digests, and topic views
 - Phase 6 production hardening:
   - Source failure counters and automatic cooldown (`consecutive_failures`, `cooldown_until`).
   - Schedule enqueue honors cooldown to prevent hot-loop retries.
@@ -87,6 +97,8 @@
 - `GET /v2/research/ops/sources?topic_key=...&limit=...`
 - `POST /v2/research/sources/{source_id}/disable`
 - `POST /v2/research/sources/{source_id}/enable`
+- `POST /v2/research/documents/{document_id}/suppress`
+- `POST /v2/research/documents/{document_id}/unsuppress`
 - `POST /v2/research/governance/redact`
 - `GET /v2/research/review/queue?topic_key=...&limit=...`
 
@@ -95,6 +107,12 @@
 - `POST /v1/tasks/sync`
 - `POST /v1/projects/search`
 - `POST /v1/tasks/search`
+- `GET /v1/dashboard/today`
+- `GET /v1/dashboard/upcoming`
+- `GET /v1/projects/{project_id}/workspace`
+- `GET /v1/inbox`
+- `GET /v1/reviews/daily`
+- `GET /v1/reviews/weekly`
 
 ## Current storage
 - `projects`

@@ -5,10 +5,12 @@ import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.research.hygiene import detect_junk_document
 from app.research.worker import run_once
 from app.storage.db import count_research_feedback, create_db_engine
 
@@ -206,3 +208,228 @@ def test_phase5_feedback_and_ops_summary() -> None:
     assert redact.status_code == 200
     assert int(redact.json()["redacted_documents"]) >= 1
     server.shutdown()
+
+
+class _SuppressionFixtureHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        if self.path == "/feed":
+            body = f"""<?xml version="1.0" encoding="UTF-8" ?>
+<rss version="2.0">
+  <channel>
+    <title>Suppression Feed</title>
+    <item><guid>s1</guid><link>{self.server.base_url}/article-1</link></item>
+    <item><guid>s2</guid><link>{self.server.base_url}/login</link></item>
+  </channel>
+</rss>"""
+            self.send_response(200)
+            self.send_header("Content-Type", "application/rss+xml")
+            self.end_headers()
+            self.wfile.write(body.encode("utf-8"))
+            return
+        if self.path.startswith("/article-1"):
+            html = """
+            <html><head><title>Useful Research Note</title></head>
+            <body>
+            <h1>Useful Research Note</h1>
+            <p>Teams improved validation quality by adding acceptance tests and explicit review checkpoints.</p>
+            </body></html>
+            """
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(html.encode("utf-8"))
+            return
+        if self.path.startswith("/login"):
+            html = """
+            <html><head><title>Log In</title></head>
+            <body>
+            <h1>Log In</h1>
+            <p>Sign Up</p>
+            <p>Forgot your password?</p>
+            <p>Team & Enterprise</p>
+            </body></html>
+            """
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            self.wfile.write(html.encode("utf-8"))
+            return
+        if self.path == "/robots.txt":
+            robots = "User-agent: *\nAllow: /\n"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(robots.encode("utf-8"))
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, *_args: object, **_kwargs: object) -> None:
+        return
+
+
+def _start_suppression_server() -> tuple[HTTPServer, str]:
+    server = HTTPServer(("127.0.0.1", 0), _SuppressionFixtureHandler)
+    host, port = server.server_address
+    base_url = f"http://{host}:{port}"
+    setattr(server, "base_url", base_url)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, base_url
+
+
+def test_phase5_document_suppression_and_junk_filtering() -> None:
+    server, base_url = _start_suppression_server()
+    topic_key = f"phase5-suppress-{uuid.uuid4().hex[:8]}"
+    settings = _build_settings()
+    app = create_app(settings)
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {settings.context_api_token}"}
+
+    upsert = client.post(
+        "/v2/research/sources/upsert",
+        json={
+            "topic_key": topic_key,
+            "kind": "rss",
+            "name": "Suppression feed",
+            "base_url": f"{base_url}/feed",
+            "poll_interval_minutes": 60,
+            "rate_limit_per_hour": 3600,
+            "robots_mode": "strict",
+            "enabled": True,
+            "tags": ["suppression"],
+        },
+        headers=headers,
+    )
+    assert upsert.status_code == 200
+    source_id = upsert.json()["source_id"]
+
+    run_resp = client.post(
+        "/v2/research/ingest/run",
+        json={
+            "topic_key": topic_key,
+            "source_ids": [source_id],
+            "trigger": "manual",
+            "idempotency_key": "phase5-suppress-run-1",
+        },
+        headers=headers,
+    )
+    assert run_resp.status_code == 200
+    run_id = run_resp.json()["run_id"]
+
+    engine = create_db_engine(settings.database_url)
+    for _ in range(10):
+        run_once(engine)
+        status = client.get(f"/v2/research/ingest/runs/{run_id}", headers=headers)
+        if status.status_code == 200 and status.json()["status"] in {"completed", "failed"}:
+            break
+
+    docs = client.get(f"/v2/research/topics/{topic_key}/documents?limit=10", headers=headers)
+    assert docs.status_code == 200
+    items = docs.json()["items"]
+    assert len(items) == 1
+    assert items[0]["title"] == "Useful Research Note"
+
+    login_doc_id = None
+    with engine.begin() as conn:
+        rows = conn.execute(
+            sa.text(
+                """
+                SELECT document_id, suppressed, suppression_reason, canonical_url
+                FROM research_documents d
+                JOIN research_sources s ON s.source_id = d.source_id
+                WHERE s.topic_key = :topic_key
+                ORDER BY canonical_url ASC
+                """
+            ),
+            {"topic_key": topic_key},
+        ).mappings().all()
+    assert len(rows) == 2
+    for row in rows:
+        if str(row["canonical_url"]).endswith("/login"):
+            login_doc_id = str(row["document_id"])
+            assert bool(row["suppressed"]) is True
+            assert row["suppression_reason"] == "junk_url_pattern"
+    assert login_doc_id
+
+    good_doc_id = items[0]["document_id"]
+    suppress = client.post(
+        f"/v2/research/documents/{good_doc_id}/suppress?reason=manual_test",
+        headers=headers,
+    )
+    assert suppress.status_code == 200
+    assert suppress.json()["suppressed"] is True
+
+    docs_after = client.get(f"/v2/research/topics/{topic_key}/documents?limit=10", headers=headers)
+    assert docs_after.status_code == 200
+    assert docs_after.json()["items"] == []
+
+    unsuppress = client.post(
+        f"/v2/research/documents/{good_doc_id}/unsuppress",
+        headers=headers,
+    )
+    assert unsuppress.status_code == 200
+    assert unsuppress.json()["suppressed"] is False
+
+    docs_restored = client.get(f"/v2/research/topics/{topic_key}/documents?limit=10", headers=headers)
+    assert docs_restored.status_code == 200
+    assert len(docs_restored.json()["items"]) == 1
+    server.shutdown()
+
+
+def test_phase5_hygiene_detects_safe_index_and_feed_patterns() -> None:
+    assert (
+        detect_junk_document(
+            url="https://huggingface.co/docs",
+            title="Hugging Face - Documentation",
+            extracted_text="Documentation Hub and Client Libraries Hub Python Library Tasks Dataset viewer",
+            item_summary="Documentation landing page",
+            fetch_status=200,
+            fetch_fallback=None,
+        )
+        == "site_index_page"
+    )
+    assert (
+        detect_junk_document(
+            url="https://techcrunch.com",
+            title="TechCrunch | Startup and Technology News",
+            extracted_text="Top Headlines Latest News Upcoming Events Subscribe for the industry's biggest tech news",
+            item_summary="Homepage shell",
+            fetch_status=200,
+            fetch_fallback=None,
+        )
+        == "site_index_page"
+    )
+    assert (
+        detect_junk_document(
+            url="https://simonwillison.net/tags/llms.atom",
+            title="Simon Willison's Weblog: llms",
+            extracted_text="Feed content",
+            item_summary="Atom feed",
+            fetch_status=200,
+            fetch_fallback=None,
+        )
+        == "feed_endpoint"
+    )
+    assert (
+        detect_junk_document(
+            url="https://www.latent.space/s/ainews",
+            title="AINews: Weekday Roundups",
+            extracted_text="Subscribe Sign in Home Latest Top Discussions [AINews] AI Engineer will be the LAST job",
+            item_summary="Index page",
+            fetch_status=200,
+            fetch_fallback=None,
+        )
+        == "site_index_page"
+    )
+    assert (
+        detect_junk_document(
+            url="https://huggingface.co/blog/FINAL-Bench/marl-middleware",
+            title="MARL: Runtime Middleware That Reduces LLM Hallucination Without Fine-Tuning",
+            extracted_text="MARL is a middleware that inserts a multi-stage self-verification pipeline at runtime.",
+            item_summary="Useful article",
+            fetch_status=200,
+            fetch_fallback=None,
+        )
+        is None
+    )

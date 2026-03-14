@@ -26,6 +26,7 @@ from app.research.contracts import (
     ResearchFeedbackRequest,
     ResearchFeedbackResponse,
     ResearchMetric,
+    ResearchDocumentModerationResponse,
     ResearchRedactRequest,
     ResearchRedactResponse,
     ResearchRecommendation,
@@ -90,18 +91,31 @@ from app.research.contracts import (
 from app.research.embeddings import embed_texts, resolve_embedding_runtime
 from app.research.scoring import blend_score, cosine_similarity, embedding_score, lexical_score, recency_score, source_weight_score
 from app.research.ids import compute_source_id
+from app.dashboard import (
+    build_inbox,
+    build_project_workspace,
+    build_review_pack,
+    build_today_dashboard,
+    build_upcoming,
+)
 from app.models import (
+    DashboardSummary,
     ChunkSearchRequest,
     ChunkSearchResponse,
     ContextPackRequest,
     ContextPackResponse,
+    InboxResponse,
     IntelArticleStatusResponse,
     IntelIngestRequest,
     IntelIngestResponse,
     IntelIngestUrlsRequest,
     IntelIngestUrlsResponse,
     OutlineResponse,
+    ProjectListItem,
     ProjectResponse,
+    ProjectWorkspaceResponse,
+    RelatedContextItem,
+    ReviewPackResponse,
     SearchRequest,
     SearchResponse,
     SearchResult,
@@ -109,7 +123,9 @@ from app.models import (
     SectionsResponse,
     SyncProjectsRequest,
     SyncTasksRequest,
+    TodayDashboardResponse,
     TaskResponse,
+    UpcomingResponse,
     TaskSearchRequest,
 )
 from app.storage.db import (
@@ -155,11 +171,14 @@ from app.storage.db import (
     search_research_document_chunks,
     search_projects,
     search_tasks,
+    set_research_document_suppressed,
     set_research_source_enabled,
     upsert_research_source,
     get_research_document,
     get_research_topic_detail,
     upsert_intel_article_seed,
+    list_projects_page,
+    list_tasks_with_projects,
     upsert_projects,
     upsert_tasks,
     list_research_documents_for_topic,
@@ -222,6 +241,7 @@ def _runtime_banner_context(settings: Settings) -> Dict[str, Any]:
     return {
         "database_url": _redact_database_url(settings.database_url),
         "storage_hint": storage_hint,
+        "edge_proxy_enabled": bool(settings.edge_proxy_enabled),
         "persistent_corpus_guard_enabled": settings.context_api_expect_persistent_corpus,
         "expected_min_documents": settings.context_api_expected_min_documents,
         "default_topic": settings.context_api_research_topic_key,
@@ -262,6 +282,11 @@ def _runtime_corpus_guard_state(settings: Settings, engine: Any) -> Dict[str, An
 
 def _validate_runtime_corpus(settings: Settings, engine: Any) -> Dict[str, Any]:
     state = _runtime_corpus_guard_state(settings, engine)
+    if not settings.edge_proxy_enabled:
+        logger.warning(
+            "context_api_edge_proxy_disabled api started without edge overlay; "
+            "context-api.localhost will not route until started with compose.edge.yml"
+        )
     if not state["ready"] and state.get("message"):
         logger.warning(
             "context_api_runtime_guard_degraded status=%s current_documents=%s min_documents=%s sources=%s",
@@ -862,6 +887,7 @@ OPS_DASHBOARD_HTML = """<!doctype html>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;margin-top:8px;">
           <div style="min-width:0;"><div class="k">Database</div><div style="word-break:break-word;overflow-wrap:anywhere;line-height:1.35;">${esc(runtime.database_url || "unknown")}</div></div>
           <div style="min-width:0;"><div class="k">Storage</div><div style="word-break:break-word;overflow-wrap:anywhere;line-height:1.35;">${esc(runtime.storage_hint || "unknown")}</div></div>
+          <div style="min-width:0;"><div class="k">Edge Routing</div><div style="word-break:break-word;overflow-wrap:anywhere;line-height:1.35;">${runtime.edge_proxy_enabled ? "enabled" : "disabled - start with compose.edge.yml / make up"}</div></div>
           <div style="min-width:0;"><div class="k">Corpus Guard</div><div style="word-break:break-word;overflow-wrap:anywhere;line-height:1.35;">${esc(guard)}</div></div>
           <div style="min-width:0;"><div class="k">Guard Status</div><div style="word-break:break-word;overflow-wrap:anywhere;line-height:1.35;">${esc(status)}</div></div>
           <div style="min-width:0;"><div class="k">Threshold Progress</div><div style="word-break:break-word;overflow-wrap:anywhere;line-height:1.35;">${esc(progress)}</div></div>
@@ -1213,6 +1239,61 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
         return TaskResponse(**row)
+
+    @app.get("/v1/dashboard/today", response_model=TodayDashboardResponse)
+    def dashboard_today_endpoint(
+        _: None = Depends(require_bearer),
+    ) -> TodayDashboardResponse:
+        project_rows = list_projects_page(app.state.engine, limit=200)
+        task_rows = list_tasks_with_projects(app.state.engine, limit=1000)
+        return build_today_dashboard(project_rows, task_rows)
+
+    @app.get("/v1/dashboard/upcoming", response_model=UpcomingResponse)
+    def dashboard_upcoming_endpoint(
+        _: None = Depends(require_bearer),
+    ) -> UpcomingResponse:
+        task_rows = list_tasks_with_projects(app.state.engine, limit=1000)
+        return build_upcoming(task_rows)
+
+    @app.get("/v1/projects/{project_id}/workspace", response_model=ProjectWorkspaceResponse)
+    def project_workspace_endpoint(
+        project_id: str,
+        _: None = Depends(require_bearer),
+    ) -> ProjectWorkspaceResponse:
+        project_row = get_project(app.state.engine, project_id)
+        if not project_row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        project_rows = list_projects_page(app.state.engine, limit=200)
+        task_rows = list_tasks_with_projects(app.state.engine, limit=1000, project_id=project_id)
+        related_topics = list_research_topics(
+            app.state.engine,
+            query=str(project_row.get("name") or project_id),
+            limit=4,
+        )
+        return build_project_workspace(project_row, project_rows, task_rows, related_topics)
+
+    @app.get("/v1/inbox", response_model=InboxResponse)
+    def inbox_endpoint(
+        _: None = Depends(require_bearer),
+    ) -> InboxResponse:
+        task_rows = list_tasks_with_projects(app.state.engine, limit=1000)
+        return build_inbox(task_rows)
+
+    @app.get("/v1/reviews/daily", response_model=ReviewPackResponse)
+    def daily_review_endpoint(
+        _: None = Depends(require_bearer),
+    ) -> ReviewPackResponse:
+        project_rows = list_projects_page(app.state.engine, limit=200)
+        task_rows = list_tasks_with_projects(app.state.engine, limit=1000)
+        return build_review_pack(mode="daily", project_rows=project_rows, task_rows=task_rows)
+
+    @app.get("/v1/reviews/weekly", response_model=ReviewPackResponse)
+    def weekly_review_endpoint(
+        _: None = Depends(require_bearer),
+    ) -> ReviewPackResponse:
+        project_rows = list_projects_page(app.state.engine, limit=200)
+        task_rows = list_tasks_with_projects(app.state.engine, limit=1000)
+        return build_review_pack(mode="weekly", project_rows=project_rows, task_rows=task_rows)
 
     @app.post("/v2/intel/ingest", response_model=IntelIngestResponse)
     def ingest_intel_endpoint(
@@ -1783,6 +1864,52 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
         if not updated:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source not found")
         return ResearchSourceModerationResponse(source_id=source_id, enabled=True, status="updated")
+
+    @app.post(
+        "/v2/research/documents/{document_id}/suppress",
+        response_model=ResearchDocumentModerationResponse,
+    )
+    def suppress_research_document_endpoint(
+        document_id: str,
+        reason: str = "manual",
+        _: None = Depends(require_bearer),
+    ) -> ResearchDocumentModerationResponse:
+        updated = set_research_document_suppressed(
+            app.state.engine,
+            document_id=document_id,
+            suppressed=True,
+            reason=reason,
+        )
+        if not updated:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+        return ResearchDocumentModerationResponse(
+            document_id=document_id,
+            suppressed=True,
+            suppression_reason=reason.strip() or "manual",
+            status="updated",
+        )
+
+    @app.post(
+        "/v2/research/documents/{document_id}/unsuppress",
+        response_model=ResearchDocumentModerationResponse,
+    )
+    def unsuppress_research_document_endpoint(
+        document_id: str,
+        _: None = Depends(require_bearer),
+    ) -> ResearchDocumentModerationResponse:
+        updated = set_research_document_suppressed(
+            app.state.engine,
+            document_id=document_id,
+            suppressed=False,
+        )
+        if not updated:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+        return ResearchDocumentModerationResponse(
+            document_id=document_id,
+            suppressed=False,
+            suppression_reason=None,
+            status="updated",
+        )
 
     @app.post("/v2/research/ingest/run", response_model=ResearchIngestRunResponse)
     def queue_research_ingest_run_endpoint(

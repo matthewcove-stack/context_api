@@ -144,7 +144,7 @@ def test_phase4_research_retrieval_and_query_logging() -> None:
     pack = client.post(
         "/v2/research/context/pack",
         json={
-            "query": "gpu supply chain",
+            "query": "gpu supply",
             "topic_key": topic_key,
             "max_items": 2,
         },
@@ -188,7 +188,7 @@ def test_phase4_research_retrieval_and_query_logging() -> None:
 
     topic_summary = client.post(
         f"/v2/research/topics/{topic_key}/summarize",
-        json={"focus": "gpu supply chain", "max_items": 2},
+        json={"focus": "gpu supply", "max_items": 2},
         headers=headers,
     )
     assert topic_summary.status_code == 200

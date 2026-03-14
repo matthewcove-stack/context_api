@@ -11,6 +11,16 @@ from xml.etree import ElementTree
 from bs4 import BeautifulSoup
 
 
+def _host_family(host: str) -> str:
+    lowered = (host or "").strip().lower()
+    if not lowered:
+        return ""
+    parts = [part for part in lowered.split(".") if part]
+    if len(parts) <= 2:
+        return lowered
+    return ".".join(parts[-2:])
+
+
 def _normalize_url(base_url: str, candidate_url: str) -> str:
     if not candidate_url:
         return ""
@@ -19,6 +29,16 @@ def _normalize_url(base_url: str, candidate_url: str) -> str:
     if not parsed.scheme or not parsed.netloc:
         return ""
     return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", parsed.query, ""))
+
+
+def _is_same_site_family(base_url: str, candidate_url: str) -> bool:
+    base_host = urlparse(base_url).netloc.lower()
+    candidate_host = urlparse(candidate_url).netloc.lower()
+    if not base_host or not candidate_host:
+        return False
+    if candidate_host == base_host or candidate_host.endswith(f".{base_host}"):
+        return True
+    return _host_family(candidate_host) == _host_family(base_host)
 
 
 def _dedupe_items(items: List[Dict[str, str]], *, max_items: int) -> List[Dict[str, str]]:
@@ -129,6 +149,8 @@ def discover_from_html_listing(raw_text: str, *, base_url: str, max_items: int) 
         if not normalized:
             continue
         if normalized == base_url.rstrip("/"):
+            continue
+        if not _is_same_site_family(base_url, normalized):
             continue
         items.append({"url": normalized, "external_id": ""})
     return _dedupe_items(items, max_items=max_items)

@@ -81,6 +81,84 @@ class TaskResponse(BaseModel):
     raw: Optional[Dict[str, Any]] = None
 
 
+class TaskListItem(BaseModel):
+    task_id: str
+    title: str
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    due: Optional[str] = None
+    project_id: Optional[str] = None
+    project_name: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    is_overdue: bool = False
+    is_due_today: bool = False
+
+
+class ProjectListItem(BaseModel):
+    project_id: str
+    name: str
+    status: Optional[str] = None
+    open_task_count: int = 0
+    done_task_count: int = 0
+    overdue_task_count: int = 0
+    total_task_count: int = 0
+    updated_at: Optional[datetime] = None
+    health: str = "steady"
+
+
+class DashboardSummary(BaseModel):
+    overdue_count: int = 0
+    due_today_count: int = 0
+    next_count: int = 0
+    waiting_count: int = 0
+    inbox_count: int = 0
+
+
+class TodayDashboardResponse(BaseModel):
+    generated_at: datetime
+    summary: DashboardSummary
+    overdue: List[TaskListItem]
+    today: List[TaskListItem]
+    next: List[TaskListItem]
+    waiting: List[TaskListItem]
+    recent_captures: List[TaskListItem]
+    projects: List[ProjectListItem]
+
+
+class UpcomingResponse(BaseModel):
+    generated_at: datetime
+    items: List[TaskListItem]
+
+
+class RelatedContextItem(BaseModel):
+    kind: Literal["research_topic"]
+    id: str
+    label: str
+    description: Optional[str] = None
+
+
+class ProjectWorkspaceResponse(BaseModel):
+    generated_at: datetime
+    project: ProjectResponse
+    summary: ProjectListItem
+    tasks: List[TaskListItem]
+    related_context: List[RelatedContextItem]
+
+
+class InboxResponse(BaseModel):
+    generated_at: datetime
+    items: List[TaskListItem]
+
+
+class ReviewPackResponse(BaseModel):
+    generated_at: datetime
+    mode: Literal["daily", "weekly"]
+    summary: DashboardSummary
+    focus_items: List[TaskListItem]
+    completed_recent: List[TaskListItem]
+    stalled_projects: List[ProjectListItem]
+
+
 class ContextPackRequest(BaseModel):
     query: str
     topics: Optional[List[str]] = None

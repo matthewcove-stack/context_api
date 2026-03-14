@@ -1,5 +1,7 @@
 services:
   api:
+    environment:
+      EDGE_PROXY_ENABLED: "true"
     networks:
     - default
     - edge

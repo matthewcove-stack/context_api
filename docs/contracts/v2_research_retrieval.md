@@ -153,6 +153,15 @@ Response:
 - `enabled`
 - `status` (`updated`)
 
+## Endpoint: `POST /v2/research/documents/{document_id}/suppress`
+## Endpoint: `POST /v2/research/documents/{document_id}/unsuppress`
+
+Response:
+- `document_id`
+- `suppressed`
+- `suppression_reason`
+- `status` (`updated`)
+
 ## Endpoint: `POST /v2/research/governance/redact`
 
 Request:

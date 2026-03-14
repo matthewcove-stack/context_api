@@ -176,6 +176,9 @@ research_documents = Table(
     Column("published_at", DateTime(timezone=True), nullable=True),
     Column("published_at_confidence", Float, nullable=False, server_default=text("0.0")),
     Column("status", Text, nullable=False, server_default=text("'discovered'")),
+    Column("suppressed", Boolean, nullable=False, server_default=text("false")),
+    Column("suppression_reason", Text, nullable=True),
+    Column("suppressed_at", DateTime(timezone=True), nullable=True),
     Column("raw_payload", Text, nullable=True),
     Column("extracted_text", Text, nullable=True),
     Column("content_hash", Text, nullable=True),
@@ -210,6 +213,7 @@ research_documents = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Index("ix_research_documents_source_id", "source_id"),
     Index("ix_research_documents_status", "status"),
+    Index("ix_research_documents_suppressed", "suppressed"),
     Index("ix_research_documents_canonical_url", "canonical_url"),
 )
 
