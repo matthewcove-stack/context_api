@@ -91,9 +91,13 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 - Hash embeddings remain available only when `RESEARCH_ALLOW_HASH_EMBEDDINGS=true` is set explicitly for dev/test.
 
 ## Research digest generator
-- Daily digest script: `python scripts/generate_daily_research_digest.py --mode daily`
-- Backfill missing days: `python scripts/generate_daily_research_digest.py --mode backfill-missing --start-date YYYY-MM-DD --end-date YYYY-MM-DD`
-- Runbook: `docs/research_digest_generator.md`
+- Daily digest generation only: `python scripts/generate_daily_research_digest.py --mode daily`
+- Canonical publish command: `python scripts/publish_lambic_ai_brief.py --mode daily`
+- Backfill missing days: `python scripts/publish_lambic_ai_brief.py --mode backfill-missing --start-date YYYY-MM-DD --end-date YYYY-MM-DD`
+- Distribution-only refresh: `python scripts/generate_research_distribution_assets.py --mode all`
+- Runbooks:
+  - `docs/research_digest_generator.md`
+  - `docs/lambic_ai_brief_operations.md`
 
 ## ChatGPT Actions
 - Setup guide: `docs/chatgpt_actions_setup.md`

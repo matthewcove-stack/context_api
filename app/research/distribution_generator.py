@@ -10,6 +10,7 @@ from typing import Dict, Iterable, List, Literal, Optional, Sequence
 
 from pydantic import BaseModel, Field
 
+from app.research.brief_ops import ensure_dir, resolve_website_repo_paths
 from app.research.digest_generator import OutputDigest, OutputDigestCta, OutputDigestEditorial, OutputDigestShare, parse_date
 
 
@@ -73,21 +74,16 @@ class DistributionGenerationError(RuntimeError):
 
 
 def load_settings() -> DistributionGeneratorSettings:
-    output_repo = Path(
-        os.getenv("DAILY_DIGEST_OUTPUT_REPO", r"C:\Users\Matth\Documents\workspace\lambic_labs_website")
-    ).expanduser()
-    digest_dir = output_repo / Path(os.getenv("DAILY_DIGEST_WEBSITE_CONTENT_DIR", "apps/web/content/research-digests"))
-    assets_dir = output_repo / Path(
-        os.getenv("DAILY_DIGEST_ASSETS_CONTENT_DIR", "apps/web/content/research-digest-assets")
-    )
-    weekly_dir = output_repo / Path(
-        os.getenv("DAILY_DIGEST_WEEKLY_CONTENT_DIR", "apps/web/content/research-weekly")
+    paths = resolve_website_repo_paths(
+        digest_dir=os.getenv("DAILY_DIGEST_WEBSITE_CONTENT_DIR", "apps/web/content/research-digests"),
+        assets_dir=os.getenv("DAILY_DIGEST_ASSETS_CONTENT_DIR", "apps/web/content/research-digest-assets"),
+        weekly_dir=os.getenv("DAILY_DIGEST_WEEKLY_CONTENT_DIR", "apps/web/content/research-weekly"),
     )
     return DistributionGeneratorSettings(
-        output_repo=output_repo,
-        digest_dir=digest_dir,
-        assets_dir=assets_dir,
-        weekly_dir=weekly_dir,
+        output_repo=paths.repo_root,
+        digest_dir=paths.digest_dir,
+        assets_dir=paths.assets_dir,
+        weekly_dir=paths.weekly_dir,
     )
 
 
@@ -108,11 +104,6 @@ def _trim_text(value: str, limit: int) -> str:
         return compact
     trimmed = compact[: max(limit - 1, 1)].rsplit(" ", 1)[0].strip()
     return f"{trimmed}…"
-
-
-def ensure_dir(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
-
 
 def render_json(payload: BaseModel) -> str:
     return json.dumps(payload.model_dump(mode="json", exclude_none=True), indent=2, ensure_ascii=True) + "\n"
@@ -312,6 +303,19 @@ def write_weekly_digest(settings: DistributionGeneratorSettings, digest: WeeklyD
     return filepath
 
 
+def _remove_stale_json(dirpath: Path, expected_stems: Sequence[str]) -> List[Path]:
+    if not dirpath.exists():
+        return []
+    expected = set(expected_stems)
+    removed: List[Path] = []
+    for path in sorted(dirpath.glob("*.json")):
+        if path.stem in expected:
+            continue
+        path.unlink()
+        removed.append(path)
+    return removed
+
+
 def execute_generation(
     *,
     settings: DistributionGeneratorSettings,
@@ -323,21 +327,33 @@ def execute_generation(
         raise DistributionGenerationError("No daily digests found to derive distribution artifacts from")
     generated_assets: List[str] = []
     generated_weeklies: List[str] = []
+    generated_asset_paths: List[str] = []
+    generated_weekly_paths: List[str] = []
+    removed_asset_paths: List[str] = []
+    removed_weekly_paths: List[str] = []
     if mode in {"assets", "all"}:
         for digest in digests:
             asset = build_distribution_asset(digest)
             if not dry_run:
-                write_distribution_asset(settings, asset)
+                generated_asset_paths.append(str(write_distribution_asset(settings, asset)))
             generated_assets.append(asset.date)
+        if not dry_run:
+            removed_asset_paths = [str(path) for path in _remove_stale_json(settings.assets_dir, generated_assets)]
     if mode in {"weekly", "all"}:
         weekly_digests = build_weekly_digests(digests)
         for digest in weekly_digests:
             if not dry_run:
-                write_weekly_digest(settings, digest)
+                generated_weekly_paths.append(str(write_weekly_digest(settings, digest)))
             generated_weeklies.append(digest.weekId)
+        if not dry_run:
+            removed_weekly_paths = [str(path) for path in _remove_stale_json(settings.weekly_dir, generated_weeklies)]
     return {
         "mode": mode,
         "daily_digest_count": len(digests),
         "generated_assets": generated_assets,
         "generated_weeklies": generated_weeklies,
+        "generated_asset_paths": generated_asset_paths,
+        "generated_weekly_paths": generated_weekly_paths,
+        "removed_asset_paths": removed_asset_paths,
+        "removed_weekly_paths": removed_weekly_paths,
     }

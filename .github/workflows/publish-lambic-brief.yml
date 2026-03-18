@@ -1,0 +1,50 @@
+name: Publish Lambic AI Brief
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 6 * * *"
+
+concurrency:
+  group: publish-lambic-ai-brief
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: self-hosted
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+        working-directory: context_api
+
+      - name: Prepare report output
+        run: mkdir -p artifacts
+
+      - name: Publish Lambic AI Brief
+        working-directory: context_api
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CONTEXT_API_TOKEN: ${{ secrets.CONTEXT_API_TOKEN }}
+          BRIEF_PUBLISH_ENV: prod
+          BRIEF_WEBSITE_REPO: ${{ vars.BRIEF_WEBSITE_REPO }}
+          BRIEF_PUBLISH_REPORT_DIR: ${{ github.workspace }}/artifacts
+          DAILY_DIGEST_GIT_REMOTE: origin
+          DAILY_DIGEST_GIT_BRANCH: main
+        run: python scripts/publish_lambic_ai_brief.py --mode daily
+
+      - name: Upload publish report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambic-ai-brief-publish-report
+          path: artifacts/*.json
+          if-no-files-found: ignore

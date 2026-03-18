@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from app.research.brief_ops import resolve_website_repo_paths
 from app.storage.db import create_db_engine, search_research_document_chunks
 
 
@@ -556,10 +557,11 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def load_settings() -> DigestGeneratorSettings:
-    output_repo = Path(
-        os.getenv("DAILY_DIGEST_OUTPUT_REPO", r"C:\Users\Matth\Documents\workspace\lambic_labs_website")
-    ).expanduser()
-    website_content_dir = Path(os.getenv("DAILY_DIGEST_WEBSITE_CONTENT_DIR", "apps/web/content/research-digests"))
+    website_repo = resolve_website_repo_paths(
+        digest_dir=os.getenv("DAILY_DIGEST_WEBSITE_CONTENT_DIR", "apps/web/content/research-digests"),
+        assets_dir=os.getenv("DAILY_DIGEST_ASSETS_CONTENT_DIR", "apps/web/content/research-digest-assets"),
+        weekly_dir=os.getenv("DAILY_DIGEST_WEEKLY_CONTENT_DIR", "apps/web/content/research-weekly"),
+    )
     database_url = os.getenv("DATABASE_URL", "").strip()
     if not database_url:
         raise DigestGenerationError("DATABASE_URL is required")
@@ -575,8 +577,8 @@ def load_settings() -> DigestGeneratorSettings:
         openai_api_key=openai_api_key,
         context_api_token=context_api_token,
         database_url=database_url,
-        output_repo=output_repo,
-        website_content_dir=website_content_dir,
+        output_repo=website_repo.repo_root,
+        website_content_dir=website_repo.digest_dir.relative_to(website_repo.repo_root),
         author_name=os.getenv("DAILY_DIGEST_AUTHOR_NAME", "Lambic AI Brief Editor").strip()
         or "Lambic AI Brief Editor",
         git_remote=os.getenv("DAILY_DIGEST_GIT_REMOTE", "origin").strip() or "origin",
@@ -1161,25 +1163,6 @@ def write_digest_file(digest_dir: Path, digest: OutputDigest) -> Path:
     return filepath
 
 
-def run_git_command(repo: Path, args: Sequence[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-
-
-def ensure_publishable_worktree(repo: Path) -> None:
-    status = run_git_command(repo, ["status", "--porcelain"])
-    if status.returncode != 0:
-        raise DigestGenerationError(status.stderr.strip() or "Unable to inspect website repo status")
-    if status.stdout.strip():
-        raise DigestGenerationError("Website repo has uncommitted changes; refusing to auto-commit generated digests")
-
-
 def validate_website_build(settings: DigestGeneratorSettings) -> None:
     if not settings.validate_build:
         return
@@ -1198,26 +1181,6 @@ def validate_website_build(settings: DigestGeneratorSettings) -> None:
     )
     if result.returncode != 0:
         raise DigestGenerationError(result.stdout + "\n" + result.stderr)
-
-
-def commit_and_push_generated_digests(
-    *,
-    settings: DigestGeneratorSettings,
-    filepaths: Sequence[Path],
-    message: str,
-) -> None:
-    repo = settings.output_repo
-    for path in filepaths:
-        relative_path = str(path.relative_to(repo))
-        add_result = run_git_command(repo, ["add", relative_path])
-        if add_result.returncode != 0:
-            raise DigestGenerationError(add_result.stderr.strip() or f"Unable to add {path}")
-    commit_result = run_git_command(repo, ["commit", "-m", message])
-    if commit_result.returncode != 0:
-        raise DigestGenerationError(commit_result.stderr.strip() or commit_result.stdout.strip() or "git commit failed")
-    push_result = run_git_command(repo, ["push", settings.git_remote, settings.git_branch])
-    if push_result.returncode != 0:
-        raise DigestGenerationError(push_result.stderr.strip() or push_result.stdout.strip() or "git push failed")
 
 
 def generate_digest_for_day(
@@ -1271,15 +1234,6 @@ def generate_digest_for_day(
     filepath = write_digest_file(settings.digest_dir, digest)
     return DayRunResult(date=target_date, status="generated", filepath=filepath)
 
-
-def build_commit_message(mode: RunMode, generated_dates: Sequence[date]) -> str:
-    if not generated_dates:
-        return "Update research digests"
-    if mode == "daily" and len(generated_dates) == 1:
-        return f"Add research digest for {generated_dates[0].isoformat()}"
-    return f"Backfill research digests {generated_dates[0].isoformat()} to {generated_dates[-1].isoformat()}"
-
-
 def execute_generation(
     *,
     settings: DigestGeneratorSettings,
@@ -1297,9 +1251,6 @@ def execute_generation(
     )
     results: List[DayRunResult] = []
 
-    if not request.dry_run:
-        ensure_publishable_worktree(settings.output_repo)
-
     for target in target_dates:
         try:
             results.append(
@@ -1315,13 +1266,6 @@ def execute_generation(
             results.append(DayRunResult(date=target, status="failed", reason=str(exc)))
 
     generated = [result for result in results if result.status == "generated" and result.filepath]
-    if generated and not request.dry_run:
-        validate_website_build(settings)
-        commit_and_push_generated_digests(
-            settings=settings,
-            filepaths=[result.filepath for result in generated if result.filepath is not None],
-            message=build_commit_message(request.mode, [result.date for result in generated]),
-        )
 
     report = {
         "mode": request.mode,
@@ -1338,6 +1282,7 @@ def execute_generation(
             }
             for result in results
         ],
+        "generated_dates": [result.date.isoformat() for result in generated],
     }
 
     if request.mode == "daily":

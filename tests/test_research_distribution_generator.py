@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.research.digest_generator import OutputDigest, OutputDigestItem
-from app.research.distribution_generator import build_distribution_asset, build_weekly_digests
+from app.research.distribution_generator import (
+    DistributionGeneratorSettings,
+    build_distribution_asset,
+    build_weekly_digests,
+    execute_generation,
+    render_json,
+)
 
 
 def _digest(date: str, *, title: str, issue_summary: str, topics: list[str], top_things: list[str]) -> OutputDigest:
@@ -83,3 +91,50 @@ def test_build_weekly_digests_groups_by_iso_week_and_keeps_topics() -> None:
     assert "agents" in weekly[0].topThemes
     assert weekly[0].share.canonicalPath == "/brief/weekly/2026-W11"
     assert weekly[0].editorial.editorialFrame
+
+
+def test_execute_generation_refreshes_outputs_and_removes_stale_files(tmp_path: Path) -> None:
+    output_repo = tmp_path / "website"
+    digest_dir = output_repo / "apps" / "web" / "content" / "research-digests"
+    assets_dir = output_repo / "apps" / "web" / "content" / "research-digest-assets"
+    weekly_dir = output_repo / "apps" / "web" / "content" / "research-weekly"
+    digest_dir.mkdir(parents=True)
+    assets_dir.mkdir(parents=True)
+    weekly_dir.mkdir(parents=True)
+
+    digests = [
+        _digest(
+            "2026-03-12",
+            title="Issue A",
+            issue_summary="Issue A summary.",
+            topics=["agents", "tooling"],
+            top_things=["A practical point from issue A."],
+        ),
+        _digest(
+            "2026-03-11",
+            title="Issue B",
+            issue_summary="Issue B summary.",
+            topics=["agents", "infrastructure"],
+            top_things=["A practical point from issue B."],
+        ),
+    ]
+    for digest in digests:
+        (digest_dir / f"{digest.date}.json").write_text(render_json(digest), encoding="utf-8")
+    (assets_dir / "stale.json").write_text("{}", encoding="utf-8")
+    (weekly_dir / "stale.json").write_text("{}", encoding="utf-8")
+
+    report = execute_generation(
+        settings=DistributionGeneratorSettings(
+            output_repo=output_repo,
+            digest_dir=digest_dir,
+            assets_dir=assets_dir,
+            weekly_dir=weekly_dir,
+        ),
+        mode="all",
+        dry_run=False,
+    )
+
+    assert sorted(report["generated_assets"]) == ["2026-03-11", "2026-03-12"]
+    assert report["generated_weeklies"] == ["2026-W11"]
+    assert not (assets_dir / "stale.json").exists()
+    assert not (weekly_dir / "stale.json").exists()

@@ -26,21 +26,23 @@ Important constraints:
    - `context_api` owns source selection, enrichment, digest drafting, and structured output.
    - `lambic_labs_website` owns routes, metadata, archive UX, and conversion UI.
 
-2. The current weekly capability is not yet a publishable weekly product.
+2. Weekly is now a publishable product surface, but its ops path still needs to stay aligned with daily publish.
    - `context_api` exposes grouped weekly clusters for editorial synthesis.
-   - the website has no weekly roundup route, loader, or artifact type.
+   - the website has weekly roundup routes, loaders, feeds, and artifact types under `apps/web/content/research-weekly/`.
+   - remaining work is operational hardening, not basic weekly rendering.
 
 3. Conversion and sharing are currently minimal.
    - `/brief` has a descriptive hero and archive listing, but no real subscription surface, newcomer path, or topic navigation.
    - issue metadata is limited to page `title` and `description`; there is no robust Open Graph/Twitter metadata model, RSS feed, or social card pipeline.
 
-4. Distribution assets are not modeled yet.
-   - generated issue JSON contains editorial issue content only.
-   - there is no structured storage for founder/company posts, email teaser copy, or review-ready derivative assets.
+4. Distribution assets are now modeled as separate generated artifacts.
+   - public issue content lives in `research-digests/YYYY-MM-DD.json`.
+   - derivative copy lives in `research-digest-assets/YYYY-MM-DD.json`.
+   - remaining work is around review workflow and publish orchestration, not schema existence.
 
-5. Measurement is absent.
-   - there is no analytics integration in the website repo.
-   - the generator does not emit any publish-side metadata that would support campaign attribution or performance reporting.
+5. Measurement exists at the site layer, but reporting and publish-side feedback loops remain thin.
+   - the website includes Plausible event wiring for entry, share, topic, and subscribe surfaces.
+   - the generator still does not emit richer attribution or downstream performance summaries.
 
 ## Recommended architecture decisions
 
