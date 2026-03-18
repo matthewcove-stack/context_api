@@ -2,6 +2,21 @@ name: Publish Lambic AI Brief
 
 on:
   workflow_dispatch:
+    inputs:
+      date:
+        description: Optional UTC publication date (YYYY-MM-DD)
+        required: false
+        type: string
+      dry_run:
+        description: Run generation and validation without writing or pushing
+        required: false
+        default: true
+        type: boolean
+      force:
+        description: Force generation even if the date would normally be skipped
+        required: false
+        default: false
+        type: boolean
   schedule:
     - cron: "30 6 * * *"
 
@@ -37,7 +52,18 @@ jobs:
           BRIEF_PUBLISH_REPORT_DIR: ${{ github.workspace }}/artifacts
           DAILY_DIGEST_GIT_REMOTE: origin
           DAILY_DIGEST_GIT_BRANCH: main
-        run: python scripts/publish_lambic_ai_brief.py --mode daily
+        run: |
+          $args = @("scripts/publish_lambic_ai_brief.py", "--mode", "daily")
+          if ("${{ inputs.date }}") {
+            $args += @("--date", "${{ inputs.date }}")
+          }
+          if ("${{ inputs.dry_run }}" -eq "true") {
+            $args += "--dry-run"
+          }
+          if ("${{ inputs.force }}" -eq "true") {
+            $args += "--force"
+          }
+          python @args
 
       - name: Upload publish report
         if: always()
