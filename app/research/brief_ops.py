@@ -11,6 +11,7 @@ from typing import Iterator, List, Sequence
 
 
 LEGACY_DEV_WEBSITE_REPO = Path(r"C:\Users\Matth\Documents\workspace\lambic_labs_website")
+_NPM_INSTALL_CACHE: set[Path] = set()
 
 
 class BriefOpsError(RuntimeError):
@@ -128,10 +129,44 @@ def commit_and_push(repo: Path, *, remote: str, branch: str, message: str) -> No
         raise BriefOpsError(push_result.stderr.strip() or push_result.stdout.strip() or "git push failed")
 
 
+def _ensure_npm_dependencies(workdir: Path, npm_executable: str) -> None:
+    resolved = workdir.resolve()
+    if resolved in _NPM_INSTALL_CACHE:
+        return
+    if (workdir / "node_modules" / ".bin").exists():
+        _NPM_INSTALL_CACHE.add(resolved)
+        return
+
+    install_result = subprocess.run(
+        [npm_executable, "ci"],
+        cwd=workdir,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if install_result.returncode != 0:
+        fallback_result = subprocess.run(
+            [npm_executable, "install"],
+            cwd=workdir,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if fallback_result.returncode != 0:
+            raise BriefOpsError(fallback_result.stdout + "\n" + fallback_result.stderr)
+
+    _NPM_INSTALL_CACHE.add(resolved)
+
+
 def run_npm_script(workdir: Path, script: str) -> subprocess.CompletedProcess[str]:
     npm_executable = shutil.which("npm.cmd") or shutil.which("npm")
     if not npm_executable:
         raise BriefOpsError("Unable to find npm or npm.cmd required for website validation")
+    _ensure_npm_dependencies(workdir, npm_executable)
     result = subprocess.run(
         [npm_executable, "run", script],
         cwd=workdir,
