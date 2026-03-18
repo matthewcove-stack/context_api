@@ -3,6 +3,7 @@
 ## Purpose
 
 This runbook covers the production publish path for the Lambic AI Brief.
+For a visual end-to-end map, see `docs/lambic_ai_brief_pipeline_diagrams.md`.
 
 The Brief is a two-repo system:
 
