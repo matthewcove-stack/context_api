@@ -136,6 +136,8 @@ class DigestGeneratorSettings:
     backfill_end_date: Optional[date]
     max_items: int
     min_items: int
+    min_source_count: int
+    backfill_min_source_count: int
     lookback_hours: int
     source_limit_per_digest: int
     validate_build: bool
@@ -591,6 +593,16 @@ def load_settings() -> DigestGeneratorSettings:
         else None,
         max_items=max(int(os.getenv("DAILY_DIGEST_MAX_ITEMS", "7")), 1),
         min_items=max(int(os.getenv("DAILY_DIGEST_MIN_ITEMS", "4")), 1),
+        min_source_count=max(int(os.getenv("DAILY_DIGEST_MIN_SOURCE_COUNT", "3")), 1),
+        backfill_min_source_count=max(
+            int(
+                os.getenv(
+                    "DAILY_DIGEST_BACKFILL_MIN_SOURCE_COUNT",
+                    os.getenv("DAILY_DIGEST_MIN_SOURCE_COUNT", "3"),
+                )
+            ),
+            1,
+        ),
         lookback_hours=max(int(os.getenv("DAILY_DIGEST_LOOKBACK_HOURS", "24")), 1),
         source_limit_per_digest=max(int(os.getenv("DAILY_DIGEST_SOURCE_LIMIT_PER_DIGEST", "2")), 1),
         validate_build=_env_bool("DAILY_DIGEST_VALIDATE_BUILD", True),
@@ -1122,11 +1134,11 @@ def build_output_digest(
     )
 
 
-def quality_gate_digest(digest: OutputDigest, *, min_items: int) -> Optional[str]:
+def quality_gate_digest(digest: OutputDigest, *, min_items: int, min_source_count: int = 3) -> Optional[str]:
     if len(digest.items) < min_items:
         return f"only {len(digest.items)} items selected"
     source_names = {item.sourceName for item in digest.items}
-    if len(source_names) < min(3, len(digest.items)):
+    if len(source_names) < min(max(min_source_count, 1), len(digest.items)):
         return "insufficient source diversity"
     source_urls = [item.sourceUrl for item in digest.items]
     if len(set(source_urls)) != len(source_urls):
@@ -1206,6 +1218,22 @@ def generate_digest_for_day(
         source_limit_per_digest=settings.source_limit_per_digest,
     )
     attach_support_snippets(engine, selected)
+    if len(selected) < settings.min_items and request.mode != "daily":
+        fallback_lookback_days = max(int(os.getenv("DAILY_DIGEST_BACKFILL_FALLBACK_LOOKBACK_DAYS", "0")), 0)
+        if fallback_lookback_days > 0:
+            fallback_window_start = window_start - timedelta(days=fallback_lookback_days)
+            fallback_candidates = load_candidates_for_window(
+                engine,
+                topic_key=settings.topic_key,
+                window_start=fallback_window_start,
+                window_end=window_end,
+            )
+            selected = select_distinct_candidates(
+                fallback_candidates,
+                max_items=settings.max_items,
+                source_limit_per_digest=settings.source_limit_per_digest,
+            )
+            attach_support_snippets(engine, selected)
     if len(selected) < settings.min_items:
         return DayRunResult(date=target_date, status="skipped-weak", reason=f"only {len(selected)} strong items found")
 
@@ -1226,7 +1254,8 @@ def generate_digest_for_day(
         draft=draft,
         candidates=selected,
     )
-    gate_error = quality_gate_digest(digest, min_items=settings.min_items)
+    min_source_count = settings.min_source_count if request.mode == "daily" else settings.backfill_min_source_count
+    gate_error = quality_gate_digest(digest, min_items=settings.min_items, min_source_count=min_source_count)
     if gate_error:
         return DayRunResult(date=target_date, status="skipped-weak", reason=gate_error)
     if request.dry_run:

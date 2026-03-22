@@ -59,6 +59,8 @@ Recommended defaults are defined in `.env.example`.
 - Backfill is bounded by the earliest digestable date in the research corpus.
 - Existing digest files are treated as authoritative for `backfill-missing`.
 - Weak historical days are skipped instead of padded with low-signal content.
+- Source diversity thresholds are configurable via `DAILY_DIGEST_MIN_SOURCE_COUNT` and `DAILY_DIGEST_BACKFILL_MIN_SOURCE_COUNT`.
+- Backfill fallback can widen the retrieval window with `DAILY_DIGEST_BACKFILL_FALLBACK_LOOKBACK_DAYS` (default disabled).
 
 ## Supporting commands
 

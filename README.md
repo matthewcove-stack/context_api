@@ -94,6 +94,8 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 - Daily digest generation only: `python scripts/generate_daily_research_digest.py --mode daily`
 - Canonical publish command: `python scripts/publish_lambic_ai_brief.py --mode daily`
 - Backfill missing days: `python scripts/publish_lambic_ai_brief.py --mode backfill-missing --start-date YYYY-MM-DD --end-date YYYY-MM-DD`
+- Lambic Local 1 host runner: `./scripts/run_lambic_brief_publish.sh --mode daily`
+- Daily host scheduler wrapper: `./scripts/run_lambic_brief_publish_daily.sh` (includes strict pass + backfill fallback for still-missing days)
 - Distribution-only refresh: `python scripts/generate_research_distribution_assets.py --mode all`
 - Runbooks:
   - `docs/research_digest_generator.md`

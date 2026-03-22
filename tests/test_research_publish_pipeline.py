@@ -36,6 +36,8 @@ def _digest_settings(repo: Path) -> DigestGeneratorSettings:
         backfill_end_date=None,
         max_items=7,
         min_items=4,
+        min_source_count=3,
+        backfill_min_source_count=3,
         lookback_hours=24,
         source_limit_per_digest=2,
         validate_build=True,

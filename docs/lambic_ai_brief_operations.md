@@ -89,6 +89,23 @@ Recommended timing:
 
 The repository also includes a sample scheduled GitHub Actions workflow for self-hosted runners.
 
+For Lambic Local 1 host scheduling, use:
+
+```bash
+cd /srv/lambic/apps/brainos-workspace/context_api
+./scripts/run_lambic_brief_publish_daily.sh
+```
+
+The host runner script:
+
+- reads BrainOS runtime secrets from `/srv/lambic/apps/brainos-workspace/brain_os/.env`
+- resolves `brainos_context_postgres` container IP for `DATABASE_URL`
+- maps `CONTEXT_API_BEARER_TOKEN` to `CONTEXT_API_TOKEN`
+- points publish output to `/srv/lambic/apps/lambic-labs-site`
+- bootstraps a local `.venv_publish` and installs `requirements.txt` on first run
+- runs `backfill-missing` over a rolling 8-day UTC window so delayed ingestion can still produce missing issues
+- retries any still-missing dates in that window with backfill-safe minimum thresholds (`DAILY_DIGEST_BACKFILL_MIN_ITEMS`, `DAILY_DIGEST_BACKFILL_MIN_SOURCE_COUNT`) and optional fallback lookback (`DAILY_DIGEST_BACKFILL_FALLBACK_LOOKBACK_DAYS`)
+
 ## Expected outputs
 
 Published website content lives in:
