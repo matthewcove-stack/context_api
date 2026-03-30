@@ -235,6 +235,52 @@ def test_publish_pipeline_blocks_daily_publish_when_candidate_preflight_fails(
         )
 
 
+def test_publish_pipeline_dry_run_skips_when_candidate_preflight_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo = _website_repo(tmp_path)
+    digest_settings = _digest_settings(repo)
+    distribution_settings = _distribution_settings(repo)
+
+    monkeypatch.setattr("app.research.publish_pipeline.create_generator_engine", lambda settings: object())
+    monkeypatch.setattr(
+        "app.research.publish_pipeline._candidate_readiness",
+        lambda **kwargs: {
+            "evaluated": True,
+            "minimum_required_items": 4,
+            "enough_candidates": False,
+            "error": "only 2 strong items found for 2026-03-12",
+        },
+    )
+    monkeypatch.setattr(
+        "app.research.publish_pipeline.execute_digest_generation",
+        lambda **kwargs: {
+            "mode": "daily",
+            "generated_dates": [],
+            "results": [{"date": "2026-03-12", "status": "skipped-weak", "reason": "only 2 strong items found"}],
+        },
+    )
+    monkeypatch.setattr("app.research.publish_pipeline.execute_distribution_generation", lambda **kwargs: {})
+
+    report = execute_publish(
+        request=GeneratorRequest(
+            mode="daily",
+            target_date=None,
+            start_date=None,
+            end_date=None,
+            force=False,
+            dry_run=True,
+        ),
+        digest_settings=digest_settings,
+        distribution_settings=distribution_settings,
+    )
+
+    assert report["generated_dates"] == []
+    assert report["skipped_dates"] == [{"date": "2026-03-12", "reason": "only 2 strong items found"}]
+    assert report["pushed"] is False
+
+
 def test_publish_pipeline_fails_before_mutation_when_repo_is_dirty(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
