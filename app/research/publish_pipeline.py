@@ -280,7 +280,11 @@ def execute_publish(
     if not request.dry_run:
         ensure_clean_worktree(paths.repo_root)
         preflight["worktree_clean"] = True
-    if candidate_readiness.get("evaluated") and candidate_readiness.get("enough_candidates") is False:
+    if (
+        not request.dry_run
+        and candidate_readiness.get("evaluated")
+        and candidate_readiness.get("enough_candidates") is False
+    ):
         raise BriefPublishError(candidate_readiness.get("error") or "Not enough strong candidates for publish")
 
     with prepare_publish_workspace(paths, dry_run=request.dry_run) as workspace:
@@ -294,6 +298,7 @@ def execute_publish(
             settings=workspace_digest_settings,
             request=workspace_request,
             engine=engine,
+            allow_skipped_weak=request.dry_run,
         )
         generated_dates = _extract_generated_dates(digest_report)
 

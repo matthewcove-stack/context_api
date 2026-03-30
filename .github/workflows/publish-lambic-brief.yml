@@ -26,16 +26,25 @@ concurrency:
 
 jobs:
   publish:
-    runs-on: self-hosted
+    runs-on:
+      - self-hosted
+      - Windows
+      - X64
+      - context-api
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Create Python virtualenv
         shell: pwsh
         run: |
-          py -3.12 -m pip install --upgrade pip
-          py -3.12 -m pip install -r requirements.txt
+          $python = 'C:\Users\Matth\AppData\Local\Programs\Python\Python312\python.exe'
+          if (-not (Test-Path $python)) {
+            throw "Expected Python 3.12 at $python"
+          }
+          & $python -m venv .venv
+          & .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          & .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 
       - name: Prepare report output
         shell: pwsh
@@ -63,7 +72,7 @@ jobs:
           if ("${{ inputs.force }}" -eq "true") {
             $args += "--force"
           }
-          py -3.12 @args
+          & .\.venv\Scripts\python.exe @args
 
       - name: Upload publish report
         if: always()
