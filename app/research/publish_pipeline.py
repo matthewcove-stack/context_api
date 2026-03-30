@@ -298,6 +298,7 @@ def execute_publish(
             settings=workspace_digest_settings,
             request=workspace_request,
             engine=engine,
+            allow_skipped_weak=request.dry_run,
         )
         generated_dates = _extract_generated_dates(digest_report)
 

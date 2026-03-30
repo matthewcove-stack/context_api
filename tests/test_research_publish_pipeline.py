@@ -79,7 +79,13 @@ def test_publish_pipeline_dry_run_uses_workspace_copy(
     def fake_create_engine(settings: DigestGeneratorSettings) -> object:
         return object()
 
-    def fake_digest(*, settings: DigestGeneratorSettings, request: GeneratorRequest, engine: object) -> dict:
+    def fake_digest(
+        *,
+        settings: DigestGeneratorSettings,
+        request: GeneratorRequest,
+        engine: object,
+        allow_skipped_weak: bool = False,
+    ) -> dict:
         settings.digest_dir.mkdir(parents=True, exist_ok=True)
         (settings.digest_dir / "2026-03-12.json").write_text("{}", encoding="utf-8")
         return {
@@ -402,3 +408,49 @@ def test_execute_generation_daily_publish_raises_on_skipped_weak(
             ),
             engine=object(),
         )
+
+
+def test_execute_generation_allows_skipped_weak_when_explicitly_permitted(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo = _website_repo(tmp_path)
+    digest_settings = _digest_settings(repo)
+
+    monkeypatch.setattr(
+        "app.research.digest_generator.get_existing_digest_dates",
+        lambda digest_dir: set(),
+    )
+    monkeypatch.setattr(
+        "app.research.digest_generator.get_earliest_digestable_date",
+        lambda engine, topic_key: None,
+    )
+    monkeypatch.setattr(
+        "app.research.digest_generator.compute_target_dates",
+        lambda **kwargs: [date(2026, 3, 12)],
+    )
+    monkeypatch.setattr(
+        "app.research.digest_generator.generate_digest_for_day",
+        lambda **kwargs: DayRunResult(
+            date=date(2026, 3, 12),
+            status="skipped-weak",
+            reason="only 2 strong items found",
+        ),
+    )
+
+    report = execute_generation(
+        settings=digest_settings,
+        request=GeneratorRequest(
+            mode="daily",
+            target_date=None,
+            start_date=None,
+            end_date=None,
+            force=False,
+            dry_run=False,
+        ),
+        engine=object(),
+        allow_skipped_weak=True,
+    )
+
+    assert report["generated_dates"] == []
+    assert report["results"][0]["status"] == "skipped-weak"

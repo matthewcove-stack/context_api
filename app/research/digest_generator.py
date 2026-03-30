@@ -1268,6 +1268,7 @@ def execute_generation(
     settings: DigestGeneratorSettings,
     request: GeneratorRequest,
     engine: Optional[Engine] = None,
+    allow_skipped_weak: bool = False,
 ) -> Dict[str, Any]:
     effective_engine = engine or create_generator_engine(settings)
     existing_dates = get_existing_digest_dates(settings.digest_dir)
@@ -1318,7 +1319,12 @@ def execute_generation(
         daily_result = results[0] if results else None
         if daily_result and daily_result.status == "failed":
             raise DigestGenerationError(daily_result.reason or daily_result.status)
-        if daily_result and daily_result.status == "skipped-weak" and not request.dry_run:
+        if (
+            daily_result
+            and daily_result.status == "skipped-weak"
+            and not request.dry_run
+            and not allow_skipped_weak
+        ):
             raise DigestGenerationError(daily_result.reason or daily_result.status)
     elif any(result.status == "failed" for result in results):
         raise DigestGenerationError("One or more backfill dates failed")
