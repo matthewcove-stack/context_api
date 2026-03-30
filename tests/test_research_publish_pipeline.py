@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from datetime import date
 from pathlib import Path
 
 import pytest
 
 from app.research.brief_ops import BriefOpsError, resolve_website_repo_paths
-from app.research.digest_generator import DigestGeneratorSettings, GeneratorRequest
+from app.research.digest_generator import (
+    DayRunResult,
+    DigestGenerationError,
+    DigestGeneratorSettings,
+    execute_generation,
+    GeneratorRequest,
+)
 from app.research.distribution_generator import DistributionGeneratorSettings
 from app.research.publish_pipeline import BriefPublishError, execute_publish
 
@@ -307,4 +313,92 @@ def test_publish_pipeline_fails_before_mutation_when_repo_is_dirty(
             ),
             digest_settings=digest_settings,
             distribution_settings=distribution_settings,
+        )
+
+
+def test_execute_generation_daily_dry_run_allows_skipped_weak(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo = _website_repo(tmp_path)
+    digest_settings = _digest_settings(repo)
+
+    monkeypatch.setattr(
+        "app.research.digest_generator.get_existing_digest_dates",
+        lambda digest_dir: set(),
+    )
+    monkeypatch.setattr(
+        "app.research.digest_generator.get_earliest_digestable_date",
+        lambda engine, topic_key: None,
+    )
+    monkeypatch.setattr(
+        "app.research.digest_generator.compute_target_dates",
+        lambda **kwargs: [date(2026, 3, 12)],
+    )
+    monkeypatch.setattr(
+        "app.research.digest_generator.generate_digest_for_day",
+        lambda **kwargs: DayRunResult(
+            date=date(2026, 3, 12),
+            status="skipped-weak",
+            reason="only 2 strong items found",
+        ),
+    )
+
+    report = execute_generation(
+        settings=digest_settings,
+        request=GeneratorRequest(
+            mode="daily",
+            target_date=None,
+            start_date=None,
+            end_date=None,
+            force=False,
+            dry_run=True,
+        ),
+        engine=object(),
+    )
+
+    assert report["generated_dates"] == []
+    assert report["results"][0]["status"] == "skipped-weak"
+
+
+def test_execute_generation_daily_publish_raises_on_skipped_weak(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo = _website_repo(tmp_path)
+    digest_settings = _digest_settings(repo)
+
+    monkeypatch.setattr(
+        "app.research.digest_generator.get_existing_digest_dates",
+        lambda digest_dir: set(),
+    )
+    monkeypatch.setattr(
+        "app.research.digest_generator.get_earliest_digestable_date",
+        lambda engine, topic_key: None,
+    )
+    monkeypatch.setattr(
+        "app.research.digest_generator.compute_target_dates",
+        lambda **kwargs: [date(2026, 3, 12)],
+    )
+    monkeypatch.setattr(
+        "app.research.digest_generator.generate_digest_for_day",
+        lambda **kwargs: DayRunResult(
+            date=date(2026, 3, 12),
+            status="skipped-weak",
+            reason="only 2 strong items found",
+        ),
+    )
+
+    with pytest.raises(DigestGenerationError, match="only 2 strong items found"):
+        execute_generation(
+            settings=digest_settings,
+            request=GeneratorRequest(
+                mode="daily",
+                target_date=None,
+                start_date=None,
+                end_date=None,
+                force=False,
+                dry_run=False,
+            ),
+            engine=object(),
         )

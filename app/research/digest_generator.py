@@ -1316,7 +1316,9 @@ def execute_generation(
 
     if request.mode == "daily":
         daily_result = results[0] if results else None
-        if daily_result and daily_result.status in {"failed", "skipped-weak"}:
+        if daily_result and daily_result.status == "failed":
+            raise DigestGenerationError(daily_result.reason or daily_result.status)
+        if daily_result and daily_result.status == "skipped-weak" and not request.dry_run:
             raise DigestGenerationError(daily_result.reason or daily_result.status)
     elif any(result.status == "failed" for result in results):
         raise DigestGenerationError("One or more backfill dates failed")
