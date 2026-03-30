@@ -26,7 +26,11 @@ concurrency:
 
 jobs:
   publish:
-    runs-on: self-hosted
+    runs-on:
+      - self-hosted
+      - Windows
+      - X64
+      - context-api
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
