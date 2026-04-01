@@ -96,6 +96,7 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 - Backfill missing days: `python scripts/publish_lambic_ai_brief.py --mode backfill-missing --start-date YYYY-MM-DD --end-date YYYY-MM-DD`
 - Lambic Local 1 host runner: `./scripts/run_lambic_brief_publish.sh --mode daily`
 - Daily host scheduler wrapper: `./scripts/run_lambic_brief_publish_daily.sh` (includes strict pass + backfill fallback for still-missing days)
+- Scheduled GitHub Actions run on the self-hosted runner stays in `--dry-run` mode; use the host scheduler for the live production publish so the website repo only has one automated publisher.
 - Distribution-only refresh: `python scripts/generate_research_distribution_assets.py --mode all`
 - Runbooks:
   - `docs/research_digest_generator.md`

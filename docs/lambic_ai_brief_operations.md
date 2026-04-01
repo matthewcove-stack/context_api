@@ -88,6 +88,7 @@ Recommended timing:
 - schedule Brief publish after the ingestion window has finished
 
 The repository also includes a sample scheduled GitHub Actions workflow for self-hosted runners.
+That scheduled GitHub run is intended as a dry-run health check; the live production publish should stay on the host scheduler so only one actor mutates the website repo each day.
 
 For Lambic Local 1 host scheduling, use:
 
