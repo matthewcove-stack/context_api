@@ -124,7 +124,7 @@ def commit_and_push(repo: Path, *, remote: str, branch: str, message: str) -> No
     commit_result = run_git_command(repo, ["commit", "-m", message])
     if commit_result.returncode != 0:
         raise BriefOpsError(commit_result.stderr.strip() or commit_result.stdout.strip() or "git commit failed")
-    push_result = run_git_command(repo, ["push", remote, branch])
+    push_result = run_git_command(repo, ["push", remote, f"HEAD:{branch}"])
     if push_result.returncode != 0:
         raise BriefOpsError(push_result.stderr.strip() or push_result.stdout.strip() or "git push failed")
 

@@ -50,6 +50,35 @@ jobs:
         shell: pwsh
         run: New-Item -ItemType Directory -Force -Path artifacts | Out-Null
 
+      - name: Prepare website publish worktree
+        shell: pwsh
+        env:
+          BRIEF_WEBSITE_REPO_BASE: ${{ vars.BRIEF_WEBSITE_REPO }}
+        run: |
+          $baseRepo = $env:BRIEF_WEBSITE_REPO_BASE
+          if (-not $baseRepo) {
+            throw "Repository variable BRIEF_WEBSITE_REPO is not configured"
+          }
+          if (-not (Test-Path (Join-Path $baseRepo '.git'))) {
+            throw "Website repo is not a git repository: $baseRepo"
+          }
+
+          git config --global --add safe.directory $baseRepo
+          git -C $baseRepo fetch origin main --prune
+
+          $publishRepo = Join-Path $env:RUNNER_TEMP ("lambic-labs-website-publish-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT)
+          if (Test-Path $publishRepo) {
+            Remove-Item -LiteralPath $publishRepo -Recurse -Force
+          }
+
+          $branchName = "brief-publish/$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          git -C $baseRepo worktree add --force -b $branchName $publishRepo origin/main
+          git config --global --add safe.directory $publishRepo
+
+          "BRIEF_WEBSITE_REPO=$publishRepo" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "BRIEF_WEBSITE_REPO_BASE=$baseRepo" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "BRIEF_WEBSITE_WORKTREE_BRANCH=$branchName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Publish Lambic AI Brief
         shell: pwsh
         env:
@@ -57,7 +86,6 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CONTEXT_API_TOKEN: ${{ secrets.CONTEXT_API_TOKEN }}
           BRIEF_PUBLISH_ENV: prod
-          BRIEF_WEBSITE_REPO: ${{ vars.BRIEF_WEBSITE_REPO }}
           BRIEF_PUBLISH_REPORT_DIR: ${{ github.workspace }}/artifacts
           DAILY_DIGEST_GIT_REMOTE: origin
           DAILY_DIGEST_GIT_BRANCH: main
@@ -73,6 +101,28 @@ jobs:
             $args += "--force"
           }
           & .\.venv\Scripts\python.exe @args
+
+      - name: Clean up website publish worktree
+        if: always()
+        shell: pwsh
+        run: |
+          $baseRepo = $env:BRIEF_WEBSITE_REPO_BASE
+          $publishRepo = $env:BRIEF_WEBSITE_REPO
+          $branchName = $env:BRIEF_WEBSITE_WORKTREE_BRANCH
+
+          if ($baseRepo -and $publishRepo) {
+            git config --global --add safe.directory $baseRepo
+            if (Test-Path $publishRepo) {
+              git -C $baseRepo worktree remove --force $publishRepo
+            }
+          }
+
+          if ($baseRepo -and $branchName) {
+            $existingBranch = git -C $baseRepo branch --list $branchName
+            if ($LASTEXITCODE -eq 0 -and $existingBranch) {
+              git -C $baseRepo branch -D $branchName
+            }
+          }
 
       - name: Upload publish report
         if: always()
