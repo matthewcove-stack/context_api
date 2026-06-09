@@ -63,6 +63,11 @@ def test_build_distribution_asset_uses_digest_share_defaults() -> None:
     assert asset.share.canonicalPath == "/brief/2026-03-12"
     assert asset.topTakeaways[0].startswith("Treat agent quality")
     assert "https://lambiclabs.com/brief/2026-03-12" in asset.founderLinkedInPost
+    assert asset.companyLinkedInPost.startswith("Today’s Lambic AI Brief: Agent orchestration hardens")
+    assert "New Lambic AI Brief:" not in asset.companyLinkedInPost
+    assert "The useful bit is what it means for teams building with AI:" in asset.companyLinkedInPost
+    assert "1. Treat agent quality as an orchestration problem" in asset.companyLinkedInPost
+    assert "Full brief:\n\nhttps://lambiclabs.com/brief/2026-03-12" in asset.companyLinkedInPost
 
 
 def test_build_weekly_digests_groups_by_iso_week_and_keeps_topics() -> None:
