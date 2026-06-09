@@ -188,6 +188,7 @@ class CandidateDocument:
 class DraftDigestItem(BaseModel):
     document_id: str
     headline: str
+    contextual_background: str = ""
     what_happened: str
     why_it_matters: str
     engineering_takeaway: str
@@ -237,8 +238,10 @@ class OutputDigestItem(BaseModel):
     documentId: str
     headline: str
     category: str
+    contextualBackground: Optional[str] = None
     whatHappened: str
     sourceName: str
+    sourceTitle: Optional[str] = None
     sourceUrl: str
     publishedAt: str
     tags: List[str] = Field(default_factory=list)
@@ -439,6 +442,18 @@ def _fallback_what_happened(candidate: CandidateDocument) -> str:
     if candidate.source_name.lower().startswith("arxiv"):
         return f"An arXiv paper titled '{candidate.title}' introduced a result relevant to production AI systems."
     return f"{candidate.source_name} published '{candidate.title}', outlining an update relevant to teams building AI systems."
+
+
+def _fallback_contextual_background(candidate: CandidateDocument) -> str:
+    source = candidate.source_name.strip()
+    title = candidate.title.strip()
+    if candidate.content_type == "paper" or source.lower().startswith("arxiv"):
+        return f"{title} is a research paper surfaced via {source}."
+    if candidate.content_type == "benchmark":
+        return f"{title} is a benchmark or evaluation artifact surfaced via {source}."
+    if candidate.content_type == "guide":
+        return f"{title} is a technical guide published by {source}."
+    return ""
 
 
 def _fallback_why_it_matters(primary_category: str) -> str:
@@ -978,17 +993,24 @@ def write_editorial_draft(
     }
     system_prompt = (
         "You are the Lambic Labs editor for the Lambic AI Brief. Return strict JSON only. "
-        "Write a concise builder-facing AI engineering digest for the website. "
+        "Write a builder-facing AI engineering digest for the website with enough detail that readers can understand the development without leaving the page. "
         "Do not invent facts, links, metrics, or source names. "
         "Top-level fields: title, intro, summary, issue_summary, top_things, items[]. "
-        "Each item must contain document_id, headline, what_happened, why_it_matters, engineering_takeaway. "
+        "Each item must contain document_id, headline, contextual_background, what_happened, why_it_matters, engineering_takeaway. "
         "Use the supplied document_id values exactly once each. "
         "Keep the tone practical, technical, restrained, and useful. "
         "Write clean standard English. Avoid hype, archive language, strained metaphors, vague filler, and awkward phrasing. "
         "Do not echo extraction debris, navigation text, code fragments, timestamps, or partial sentences. "
-        "Prefer concrete engineering implications over generic commentary. "
+        "Prefer concrete engineering implications, implementation details, and verification concerns over generic commentary. "
+        "Use the supplied support_snippets, metrics, and quotes to add grounded specificity when they are clean and relevant. "
+        "Do not put URLs or markdown links in the prose; source links are rendered separately from source_url metadata. "
+        "When an item is about a named product, framework, benchmark, or company-specific system, contextual_background must give one or two grounded orientation sentences explaining what it is or what it does. "
+        "If no extra orientation is needed, use an empty string for contextual_background. "
+        "For each item, make what_happened and why_it_matters one or two substantial sentences each. "
+        "Avoid repetitive sentence stems across items such as starting every sentence with 'Builders', 'The paper', or 'This issue'. "
+        "Avoid ellipses, boilerplate transitions, and generic framing that could fit any AI article. "
         "Do not use placeholder or generic issue titles like 'AI Brief - DATE' or 'Lambic AI Brief - DATE'; write a specific issue headline. "
-        "Make issue_summary one sharp sentence, summary two or three complete sentences, and engineering_takeaway a distinct practical implication rather than a paraphrase of why_it_matters. "
+        "Make issue_summary one sharp sentence, summary three or four complete sentences, and engineering_takeaway a distinct practical implication rather than a paraphrase of why_it_matters. "
         "Every top_things entry must be a complete sentence. "
         "Strip newsletter numbering, site boilerplate, and article scaffolding from the prose."
     )
@@ -1030,18 +1052,23 @@ def build_output_digest(
         what_happened = _clean_sentence(
             draft_item.what_happened,
             minimum_words=8,
-            maximum_length=420,
-        ) or _clean_sentence(candidate.summary_short, minimum_words=8, maximum_length=420)
+            maximum_length=680,
+        ) or _clean_sentence(candidate.summary_short, minimum_words=8, maximum_length=680)
         why_it_matters = _clean_sentence(
             draft_item.why_it_matters,
             minimum_words=8,
-            maximum_length=420,
-        ) or _clean_sentence(candidate.why_it_matters, minimum_words=8, maximum_length=420)
+            maximum_length=680,
+        ) or _clean_sentence(candidate.why_it_matters, minimum_words=8, maximum_length=680)
         engineering_takeaway = _clean_sentence(
             draft_item.engineering_takeaway,
             minimum_words=6,
-            maximum_length=260,
+            maximum_length=380,
         ) or why_it_matters
+        contextual_background = _clean_sentence(
+            draft_item.contextual_background,
+            minimum_words=5,
+            maximum_length=340,
+        ) or _fallback_contextual_background(candidate)
         if _is_duplicate_takeaway(why_it_matters, engineering_takeaway):
             engineering_takeaway = _fallback_engineering_takeaway(primary_category, candidate)
         items.append(
@@ -1049,8 +1076,10 @@ def build_output_digest(
                 documentId=candidate.document_id,
                 headline=_clean_headline(draft_item.headline, candidate.title),
                 category=primary_category,
+                contextualBackground=contextual_background or None,
                 whatHappened=what_happened or _fallback_what_happened(candidate),
                 sourceName=candidate.source_name,
+                sourceTitle=_normalize_whitespace(candidate.title),
                 sourceUrl=candidate.canonical_url,
                 publishedAt=candidate.published_at.isoformat(),
                 tags=tags,
@@ -1100,9 +1129,9 @@ def build_output_digest(
         windowStart=window_start.isoformat(),
         windowEnd=window_end.isoformat(),
         title=_clean_headline(draft.title, f"Lambic AI Brief - {target_date.isoformat()}"),
-        intro=_clean_sentence(draft.intro, minimum_words=10, maximum_length=320) or fallback_intro,
-        summary=_clean_sentence(draft.summary, minimum_words=12, maximum_length=360) or fallback_summary,
-        issueSummary=_clean_sentence(draft.issue_summary, minimum_words=6, maximum_length=220) or fallback_issue_summary,
+        intro=_clean_sentence(draft.intro, minimum_words=10, maximum_length=420) or fallback_intro,
+        summary=_clean_sentence(draft.summary, minimum_words=12, maximum_length=620) or fallback_summary,
+        issueSummary=_clean_sentence(draft.issue_summary, minimum_words=6, maximum_length=260) or fallback_issue_summary,
         topThings=cleaned_top_things or [fallback_issue_summary, "Read the issue items for the engineering implications and source links."],
         topics=topics,
         coverageDays=coverage_days,
