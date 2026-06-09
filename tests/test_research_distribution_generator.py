@@ -70,6 +70,22 @@ def test_build_distribution_asset_uses_digest_share_defaults() -> None:
     assert "Full brief:\n\nhttps://lambiclabs.com/brief/2026-03-12" in asset.companyLinkedInPost
 
 
+def test_company_linkedin_post_avoids_repeating_takeaway_as_body() -> None:
+    repeated = "Routing and verification loops are becoming primary engineering levers."
+    digest = _digest(
+        "2026-03-12",
+        title="Agent orchestration hardens",
+        issue_summary=repeated,
+        topics=["agents", "evals"],
+        top_things=[repeated],
+    )
+
+    asset = build_distribution_asset(digest)
+
+    assert asset.companyLinkedInPost.count(repeated) == 1
+    assert "Summary copy for the issue" in asset.companyLinkedInPost
+
+
 def test_build_weekly_digests_groups_by_iso_week_and_keeps_topics() -> None:
     digests = [
         _digest(
