@@ -198,6 +198,7 @@ def test_build_output_digest_preserves_grounded_metadata() -> None:
 
     assert digest.items[0].documentId == "doc-1"
     assert digest.items[0].sourceName == "Source A"
+    assert digest.items[0].sourceTitle == "Title"
     assert digest.items[0].sourceUrl == "https://example.com/article"
     assert digest.items[0].category == "evals"
     assert digest.items[0].engineeringTakeaway.startswith("Treat orchestration patterns")
