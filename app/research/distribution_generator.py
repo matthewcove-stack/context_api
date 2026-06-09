@@ -105,6 +105,31 @@ def _trim_text(value: str, limit: int) -> str:
     trimmed = compact[: max(limit - 1, 1)].rsplit(" ", 1)[0].strip()
     return f"{trimmed}…"
 
+
+def _build_company_linkedin_post(digest: OutputDigest, *, issue_url: str, takeaways: Sequence[str]) -> str:
+    point_lines = [f"{index}. {_trim_text(point, 155)}" for index, point in enumerate(takeaways[:3], start=1)]
+    opening = f"Today’s Lambic AI Brief: {_trim_text(digest.title, 140)}"
+    implication = _normalize_sentence(digest.editorial.builderImplication) if digest.editorial else ""
+    body = implication or _normalize_sentence(digest.issueSummary) or _normalize_sentence(digest.summary)
+    if point_lines:
+        sections = [
+            opening,
+            "The useful bit is what it means for teams building with AI:",
+            "\n".join(point_lines),
+            _trim_text(body, 280),
+            "Full brief:",
+            issue_url,
+        ]
+    else:
+        sections = [
+            opening,
+            _trim_text(body, 340),
+            "Full brief:",
+            issue_url,
+        ]
+    return "\n\n".join(section for section in sections if section)
+
+
 def render_json(payload: BaseModel) -> str:
     return json.dumps(payload.model_dump(mode="json", exclude_none=True), indent=2, ensure_ascii=True) + "\n"
 
@@ -138,14 +163,7 @@ def build_distribution_asset(digest: OutputDigest) -> DistributionAssetBundle:
             issue_url,
         ]
     )
-    company_post = "\n\n".join(
-        [
-            f"New Lambic AI Brief: {digest.title}",
-            _trim_text(digest.summary, 280),
-            "Read the full issue:",
-            issue_url,
-        ]
-    )
+    company_post = _build_company_linkedin_post(digest, issue_url=issue_url, takeaways=takeaways)
     short_social = [
         _trim_text(f"{digest.title}: {takeaway} {issue_url}", 280)
         for takeaway in takeaways[:3]
