@@ -106,17 +106,34 @@ def _trim_text(value: str, limit: int) -> str:
     return f"{trimmed}…"
 
 
+def _is_repeated_takeaway(value: str, takeaways: Sequence[str]) -> bool:
+    normalized = _normalize_sentence(value).lower()
+    if not normalized:
+        return False
+    for takeaway in takeaways:
+        candidate = _normalize_sentence(takeaway).lower()
+        if not candidate:
+            continue
+        if normalized in candidate or candidate in normalized:
+            return True
+    return False
+
+
 def _build_company_linkedin_post(digest: OutputDigest, *, issue_url: str, takeaways: Sequence[str]) -> str:
     point_lines = [f"{index}. {_trim_text(point, 155)}" for index, point in enumerate(takeaways[:3], start=1)]
     opening = f"Today’s Lambic AI Brief: {_trim_text(digest.title, 140)}"
-    implication = _normalize_sentence(digest.editorial.builderImplication) if digest.editorial else ""
-    body = implication or _normalize_sentence(digest.issueSummary) or _normalize_sentence(digest.summary)
+    body_candidates = [
+        _normalize_sentence(digest.editorial.builderImplication) if digest.editorial else "",
+        _normalize_sentence(digest.issueSummary),
+        _normalize_sentence(digest.summary),
+    ]
+    body = next((value for value in body_candidates if value and not _is_repeated_takeaway(value, takeaways)), "")
     if point_lines:
         sections = [
             opening,
             "The useful bit is what it means for teams building with AI:",
             "\n".join(point_lines),
-            _trim_text(body, 280),
+            _trim_text(body, 280) if body else "",
             "Full brief:",
             issue_url,
         ]
