@@ -87,7 +87,7 @@ Recommended timing:
 - schedule research ingestion first
 - schedule Brief publish after the ingestion window has finished
 
-The repository also includes a sample scheduled GitHub Actions workflow for self-hosted runners.
+The repository also includes a manual GitHub Actions workflow for dry-runs and one-off publishes. Daily production publishing is owned by the Lambic Local 1 host cron so it runs beside the production research database and website checkout.
 
 For Lambic Local 1 host scheduling, use:
 
