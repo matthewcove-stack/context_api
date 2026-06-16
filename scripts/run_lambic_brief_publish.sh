@@ -10,11 +10,6 @@ POSTGRES_CONTAINER_NAME="${POSTGRES_CONTAINER_NAME:-brainos_context_postgres}"
 PUBLISH_VENV_DIR="${PUBLISH_VENV_DIR:-${REPO_ROOT}/.venv_publish}"
 PYTHON_BIN="${PYTHON_BIN:-python3.12}"
 
-if [[ ! -f "${BRAIN_OS_ENV_FILE}" ]]; then
-  echo "Missing BrainOS env file: ${BRAIN_OS_ENV_FILE}" >&2
-  exit 1
-fi
-
 require_cmd() {
   local cmd="$1"
   if ! command -v "${cmd}" >/dev/null 2>&1; then
@@ -28,18 +23,28 @@ require_cmd git
 require_cmd npm
 require_cmd "${PYTHON_BIN}"
 
-set -a
-# shellcheck disable=SC1090
-source "${BRAIN_OS_ENV_FILE}"
-set +a
+if [[ -r "${BRAIN_OS_ENV_FILE}" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "${BRAIN_OS_ENV_FILE}"
+  set +a
+elif [[ -f "${BRAIN_OS_ENV_FILE}" ]]; then
+  echo "BrainOS env file is not readable by $(id -un); using existing process environment: ${BRAIN_OS_ENV_FILE}" >&2
+else
+  echo "BrainOS env file is missing; using existing process environment: ${BRAIN_OS_ENV_FILE}" >&2
+fi
+
+if [[ -z "${CONTEXT_API_BEARER_TOKEN:-}" && -n "${CONTEXT_API_TOKEN:-}" ]]; then
+  CONTEXT_API_BEARER_TOKEN="${CONTEXT_API_TOKEN}"
+fi
 
 if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-  echo "OPENAI_API_KEY is missing from ${BRAIN_OS_ENV_FILE}" >&2
+  echo "OPENAI_API_KEY is missing from the environment and ${BRAIN_OS_ENV_FILE}" >&2
   exit 1
 fi
 
 if [[ -z "${CONTEXT_API_BEARER_TOKEN:-}" ]]; then
-  echo "CONTEXT_API_BEARER_TOKEN is missing from ${BRAIN_OS_ENV_FILE}" >&2
+  echo "CONTEXT_API_BEARER_TOKEN or CONTEXT_API_TOKEN is missing from the environment and ${BRAIN_OS_ENV_FILE}" >&2
   exit 1
 fi
 
