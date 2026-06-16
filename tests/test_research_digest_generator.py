@@ -215,6 +215,50 @@ def test_build_output_digest_preserves_grounded_metadata() -> None:
     assert "implementation" in digest.editorial.editorialFrame.lower() or "decision surface" in digest.editorial.editorialFrame.lower()
 
 
+def test_build_output_digest_replaces_blocked_public_copy_fallbacks() -> None:
+    candidate = _candidate(
+        document_id="doc-1",
+        source_name="Source A",
+        title="Agent Evaluation Harnesses Improve Release Confidence",
+        url="https://example.com/article",
+        score=1.5,
+        topic_tags=["agents", "evals"],
+    )
+    draft = DraftDigestContent(
+        title="Lambic AI Brief - 2026-03-12",
+        intro="This issue covers agents and evals with a focus on practical engineering implications.",
+        summary="This issue covers agents and evals for teams building production AI systems.",
+        issue_summary="This issue covers agents and evals for teams building production AI systems.",
+        top_things=["Read the issue items for the engineering implications and source links."],
+        items=[
+            DraftDigestItem(
+                document_id="doc-1",
+                headline="Agent evaluation harnesses improve release confidence",
+                what_happened="A release-focused evaluation harness connected agent traces to repeatable checks.",
+                why_it_matters="Teams can compare agent changes against stable traces before shipping regressions.",
+                engineering_takeaway="Version the harness with the agent runtime and run it before each release.",
+            )
+        ],
+    )
+
+    digest = build_output_digest(
+        settings=type("Settings", (), {"model": "gpt-5.2"})(),
+        target_date=date(2026, 3, 12),
+        backfill=False,
+        window_start=datetime(2026, 3, 12, 0, 0, tzinfo=timezone.utc),
+        window_end=datetime(2026, 3, 13, 0, 0, tzinfo=timezone.utc),
+        draft=draft,
+        candidates=[candidate],
+    )
+
+    public_copy = "\n".join([digest.title, digest.intro, digest.summary, digest.issueSummary, *digest.topThings])
+    assert "Lambic AI Brief - 2026-03-12" not in public_copy
+    assert "This issue covers" not in public_copy
+    assert "Read the issue items for the engineering implications and source links" not in public_copy
+    assert digest.title.startswith("Agent evaluation harnesses")
+    assert digest.intro.startswith("Agent evaluation harnesses")
+
+
 def test_determine_digest_window_rolls_forward_unpublished_gap() -> None:
     request = GeneratorRequest(
         mode="daily",

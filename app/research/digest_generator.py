@@ -118,6 +118,22 @@ JUNK_TEXT_PATTERNS = (
     "submitted on",
     "title:",
 )
+PUBLIC_COPY_BLOCKLIST = (
+    re.compile(r"outlining an update relevant to teams building AI systems", re.IGNORECASE),
+    re.compile(r"introduced a result relevant to production AI systems", re.IGNORECASE),
+    re.compile(r"Lambic AI Brief - \d{4}-\d{2}-\d{2}", re.IGNORECASE),
+    re.compile(r"This issue covers [^.]+ with a focus on practical engineering implications", re.IGNORECASE),
+    re.compile(r"This issue covers [^.]+ for teams building production AI systems", re.IGNORECASE),
+    re.compile(r"Read the issue items for the engineering implications and source links", re.IGNORECASE),
+    re.compile(r"\bin today'?s fast[- ]paced\b", re.IGNORECASE),
+    re.compile(r"\bever[- ]evolving landscape\b", re.IGNORECASE),
+    re.compile(r"\bdelve into\b", re.IGNORECASE),
+    re.compile(r"\bgame[- ]changer\b", re.IGNORECASE),
+    re.compile(r"\bunlock the power\b", re.IGNORECASE),
+    re.compile(r"\bharness the power\b", re.IGNORECASE),
+    re.compile(r"\bit is worth noting\b", re.IGNORECASE),
+    re.compile(r"\bunderscores the importance\b", re.IGNORECASE),
+)
 
 
 @dataclass(frozen=True)
@@ -303,6 +319,8 @@ def _looks_like_low_quality_text(value: str) -> bool:
     lowered = value.lower()
     if any(pattern in lowered for pattern in JUNK_TEXT_PATTERNS):
         return True
+    if any(pattern.search(value) for pattern in PUBLIC_COPY_BLOCKLIST):
+        return True
     if "{" in value or "}" in value or "`" in value:
         return True
     if re.search(r"\b[a-z]+:[\\/]", lowered):
@@ -440,8 +458,8 @@ def _fallback_engineering_takeaway(primary_category: str, candidate: CandidateDo
 
 def _fallback_what_happened(candidate: CandidateDocument) -> str:
     if candidate.source_name.lower().startswith("arxiv"):
-        return f"An arXiv paper titled '{candidate.title}' introduced a result relevant to production AI systems."
-    return f"{candidate.source_name} published '{candidate.title}', outlining an update relevant to teams building AI systems."
+        return f"An arXiv paper titled '{candidate.title}' presents the method, experiments, and limitations described in the selected source."
+    return f"{candidate.source_name} published '{candidate.title}', giving builders source material to inspect for implementation and evaluation details."
 
 
 def _fallback_contextual_background(candidate: CandidateDocument) -> str:
@@ -482,6 +500,70 @@ def _join_top_points(points: Sequence[str], *, limit: int) -> str:
     if not selected:
         return ""
     return " ".join(selected)
+
+
+def _topic_label(topics: Sequence[str]) -> str:
+    selected = [topic for topic in topics if topic][:2]
+    if not selected:
+        return "AI engineering"
+    if len(selected) == 1:
+        return selected[0]
+    return f"{selected[0]} and {selected[1]}"
+
+
+def _trim_clause(value: str, *, maximum_length: int = 120) -> str:
+    cleaned = _normalize_whitespace(value)
+    if len(cleaned) <= maximum_length:
+        return cleaned
+    trimmed = cleaned[:maximum_length].rsplit(" ", 1)[0].strip()
+    return trimmed.rstrip(",.;:")
+
+
+def _build_fallback_title(*, target_date: date, topics: Sequence[str], items: Sequence[OutputDigestItem]) -> str:
+    item_headlines = [_trim_clause(item.headline, maximum_length=70) for item in items[:2] if item.headline.strip()]
+    if len(item_headlines) >= 2:
+        return f"{item_headlines[0]}, plus {item_headlines[1]}"
+    if item_headlines:
+        return f"{item_headlines[0]} for AI engineering teams"
+    return f"{_topic_label(topics).title()} signals for AI engineering teams on {target_date.isoformat()}"
+
+
+def _build_fallback_issue_summary(*, topics: Sequence[str], items: Sequence[OutputDigestItem]) -> str:
+    if items:
+        lead = _trim_clause(items[0].headline, maximum_length=120)
+        return f"{lead} gives builders a concrete signal to test against their own AI systems."
+    return f"{_topic_label(topics).title()} updates point to concrete implementation, evaluation, and rollout decisions."
+
+
+def _build_fallback_intro(*, topics: Sequence[str], items: Sequence[OutputDigestItem]) -> str:
+    item_headlines = [_trim_clause(item.headline, maximum_length=100) for item in items[:2] if item.headline.strip()]
+    if len(item_headlines) >= 2:
+        return (
+            f"{item_headlines[0]} and {item_headlines[1]} anchor this edition, with practical signals "
+            "for implementation, evaluation, and rollout planning."
+        )
+    if item_headlines:
+        return (
+            f"{item_headlines[0]} anchors this edition, with practical signals for implementation, "
+            "evaluation, and rollout planning."
+        )
+    return (
+        f"{_topic_label(topics).title()} updates anchor this edition, with practical signals for implementation, "
+        "evaluation, and rollout planning."
+    )
+
+
+def _build_fallback_top_things(*, topics: Sequence[str], items: Sequence[OutputDigestItem]) -> List[str]:
+    if items:
+        return [
+            f"{_trim_clause(items[0].headline, maximum_length=120)} is the lead signal for builders to verify.",
+            "Compare the source-linked notes for implementation details, evaluation risks, and rollout tradeoffs.",
+        ]
+    topic = _topic_label(topics)
+    return [
+        f"{topic.title()} updates create concrete implementation choices for AI engineering teams.",
+        "Compare source evidence, evaluation requirements, and rollout risks before adopting the pattern.",
+    ]
 
 
 def _build_digest_editorial(
@@ -1099,12 +1181,13 @@ def build_output_digest(
     ][:4]
     coverage_days = max(int((window_end - window_start).total_seconds() // 86400), 1)
     cleaned_top_things = _clean_top_things(draft.top_things)
+    fallback_title = _build_fallback_title(target_date=target_date, topics=topics, items=items)
     fallback_issue_summary = _clean_sentence(
         _join_top_points(cleaned_top_things, limit=1),
         minimum_words=6,
         maximum_length=220,
     ) or _clean_sentence(
-        f"This issue covers {', '.join(topics[:3])} for teams building production AI systems.",
+        _build_fallback_issue_summary(topics=topics, items=items),
         minimum_words=8,
         maximum_length=220,
     )
@@ -1114,10 +1197,11 @@ def build_output_digest(
         maximum_length=360,
     ) or fallback_issue_summary
     fallback_intro = _clean_sentence(
-        f"This issue covers {', '.join(topics[:3])} with a focus on practical engineering implications.",
+        _build_fallback_intro(topics=topics, items=items),
         minimum_words=8,
         maximum_length=320,
     ) or fallback_summary
+    fallback_top_things = _build_fallback_top_things(topics=topics, items=items)
     issue_path = f"/brief/{target_date.isoformat()}"
     share_description = _clean_sentence(
         draft.issue_summary,
@@ -1128,18 +1212,18 @@ def build_output_digest(
         date=target_date.isoformat(),
         windowStart=window_start.isoformat(),
         windowEnd=window_end.isoformat(),
-        title=_clean_headline(draft.title, f"Lambic AI Brief - {target_date.isoformat()}"),
+        title=_clean_headline(draft.title, fallback_title),
         intro=_clean_sentence(draft.intro, minimum_words=10, maximum_length=420) or fallback_intro,
         summary=_clean_sentence(draft.summary, minimum_words=12, maximum_length=620) or fallback_summary,
         issueSummary=_clean_sentence(draft.issue_summary, minimum_words=6, maximum_length=260) or fallback_issue_summary,
-        topThings=cleaned_top_things or [fallback_issue_summary, "Read the issue items for the engineering implications and source links."],
+        topThings=cleaned_top_things or fallback_top_things,
         topics=topics,
         coverageDays=coverage_days,
         generatedAt=datetime.now(timezone.utc).isoformat(),
         generatorModel=settings.model,
         backfill=backfill,
         share=OutputDigestShare(
-            title=_clean_headline(draft.title, f"Lambic AI Brief - {target_date.isoformat()}"),
+            title=_clean_headline(draft.title, fallback_title),
             description=share_description,
             canonicalPath=issue_path,
         ),
