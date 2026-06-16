@@ -72,7 +72,10 @@ python scripts/generate_research_distribution_assets.py --mode all
 
 ## Suggested scheduler command
 
-```powershell
-cd C:\Users\Matth\Documents\workspace\brain_os_project\context_api
-python scripts/publish_lambic_ai_brief.py --mode daily
+Production scheduling is handled by `.github/workflows/publish-lambic-brief.yml` on the Lambic Local 1 host runner.
+For direct host recovery, use:
+
+```bash
+cd /srv/lambic/apps/brainos-workspace/context_api
+./scripts/run_lambic_brief_publish_daily.sh
 ```

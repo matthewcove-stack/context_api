@@ -87,7 +87,9 @@ Recommended timing:
 - schedule research ingestion first
 - schedule Brief publish after the ingestion window has finished
 
-The repository also includes a manual GitHub Actions workflow for dry-runs and one-off publishes. Daily production publishing is owned by the Lambic Local 1 host cron so it runs beside the production research database and website checkout.
+The repository also includes a scheduled GitHub Actions workflow that runs on the Lambic Local 1 host runner at 06:30 UTC. The scheduled run calls the host runner script so publishing happens beside the production research database and checked-out website repo.
+
+Manual workflow dispatch is still available for dry-runs and one-off publishes. Use `backfill-missing` with explicit `start_date` and `end_date` to catch up missed publication windows.
 
 For Lambic Local 1 host scheduling, use:
 

@@ -3,8 +3,25 @@ name: Publish Lambic AI Brief
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: Publish mode to run
+        required: false
+        default: daily
+        type: choice
+        options:
+          - daily
+          - backfill-missing
+          - backfill-range
       date:
         description: Optional UTC publication date (YYYY-MM-DD)
+        required: false
+        type: string
+      start_date:
+        description: Optional start date for backfill modes (YYYY-MM-DD)
+        required: false
+        type: string
+      end_date:
+        description: Optional end date for backfill modes (YYYY-MM-DD)
         required: false
         type: string
       dry_run:
@@ -17,6 +34,8 @@ on:
         required: false
         default: false
         type: boolean
+  schedule:
+    - cron: "30 6 * * *"
 
 concurrency:
   group: publish-lambic-ai-brief
@@ -26,60 +45,51 @@ jobs:
   publish:
     runs-on:
       - self-hosted
-      - Windows
+      - Linux
       - X64
-      - context-api
+      - lambic-local-1
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
-      - name: Create Python virtualenv
-        shell: pwsh
-        run: |
-          $python = 'C:\Users\Matth\AppData\Local\Programs\Python\Python312\python.exe'
-          if (-not (Test-Path $python)) {
-            throw "Expected Python 3.12 at $python"
-          }
-          & $python -m venv .venv
-          & .\.venv\Scripts\python.exe -m pip install --upgrade pip
-          & .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-
       - name: Prepare report output
-        shell: pwsh
-        run: New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-
-      - name: Check out website repo
-        uses: actions/checkout@v4
-        with:
-          repository: matthewcove-stack/lambic_labs_website
-          path: website
-          ref: main
-          token: ${{ secrets.LAMBIC_LABS_WEBSITE_TOKEN }}
-          fetch-depth: 1
+        shell: bash
+        run: |
+          mkdir -p artifacts
 
       - name: Publish Lambic AI Brief
-        shell: pwsh
+        shell: bash
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          CONTEXT_API_TOKEN: ${{ secrets.CONTEXT_API_TOKEN }}
-          BRIEF_PUBLISH_ENV: prod
-          BRIEF_WEBSITE_REPO: ${{ github.workspace }}/website
           BRIEF_PUBLISH_REPORT_DIR: ${{ github.workspace }}/artifacts
-          DAILY_DIGEST_GIT_REMOTE: origin
-          DAILY_DIGEST_GIT_BRANCH: main
+          INPUT_MODE: ${{ github.event.inputs.mode || 'daily' }}
+          INPUT_DATE: ${{ github.event.inputs.date || '' }}
+          INPUT_START_DATE: ${{ github.event.inputs.start_date || '' }}
+          INPUT_END_DATE: ${{ github.event.inputs.end_date || '' }}
+          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run || 'true' }}
+          INPUT_FORCE: ${{ github.event.inputs.force || 'false' }}
         run: |
-          $args = @("scripts/publish_lambic_ai_brief.py", "--mode", "daily")
-          if ("${{ inputs.date }}") {
-            $args += @("--date", "${{ inputs.date }}")
-          }
-          if ("${{ inputs.dry_run }}" -eq "true") {
-            $args += "--dry-run"
-          }
-          if ("${{ inputs.force }}" -eq "true") {
-            $args += "--force"
-          }
-          & .\.venv\Scripts\python.exe @args
+          if [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
+            ./scripts/run_lambic_brief_publish_daily.sh
+            exit 0
+          fi
+
+          args=(--mode "${INPUT_MODE}")
+          if [[ -n "${INPUT_DATE}" ]]; then
+            args+=(--date "${INPUT_DATE}")
+          fi
+          if [[ -n "${INPUT_START_DATE}" ]]; then
+            args+=(--start-date "${INPUT_START_DATE}")
+          fi
+          if [[ -n "${INPUT_END_DATE}" ]]; then
+            args+=(--end-date "${INPUT_END_DATE}")
+          fi
+          if [[ "${INPUT_DRY_RUN}" == "true" ]]; then
+            args+=(--dry-run)
+          fi
+          if [[ "${INPUT_FORCE}" == "true" ]]; then
+            args+=(--force)
+          fi
+          ./scripts/run_lambic_brief_publish.sh "${args[@]}"
 
       - name: Upload publish report
         if: always()
