@@ -72,7 +72,7 @@ python scripts/generate_research_distribution_assets.py --mode all
 
 ## Suggested scheduler command
 
-Production scheduling is handled by `.github/workflows/publish-lambic-brief.yml` on the Lambic Local 1 host runner.
+Production scheduling is handled by the `brain_os` repository's Lambic AI Brief workflow on the Lambic Local 1 host runner.
 For direct host recovery, use:
 
 ```bash
