@@ -78,7 +78,9 @@ def discover_from_feed(raw_text: str, *, base_url: str, max_items: int) -> List[
         content = node.findtext("{http://purl.org/rss/1.0/modules/content/}encoded") or ""
         summary = _text_from_markup(content or description)
         published_at = (node.findtext("pubDate") or "").strip()
-        normalized = _normalize_url(base_url, unescape(link.strip()))
+        # Some otherwise valid RSS feeds publish permalink GUIDs without a
+        # separate <link> element.
+        normalized = _normalize_url(base_url, unescape((link or guid).strip()))
         if normalized:
             items.append(
                 {
@@ -142,18 +144,50 @@ def discover_from_sitemap(raw_text: str, *, base_url: str, max_items: int) -> Li
 
 def discover_from_html_listing(raw_text: str, *, base_url: str, max_items: int) -> List[Dict[str, str]]:
     soup = BeautifulSoup(raw_text, "html.parser")
-    items: List[Dict[str, str]] = []
-    for link in soup.find_all("a", href=True):
+    ranked_items: List[tuple[int, int, Dict[str, str]]] = []
+    normalized_base = _normalize_url(base_url, base_url).rstrip("/")
+    generic_paths = {
+        "/",
+        "/about",
+        "/blog",
+        "/company",
+        "/contact",
+        "/engineering",
+        "/events",
+        "/news",
+        "/pricing",
+        "/privacy",
+        "/research",
+        "/resources",
+        "/terms",
+    }
+    for ordinal, link in enumerate(soup.find_all("a", href=True)):
         href = str(link.get("href") or "").strip()
         normalized = _normalize_url(base_url, href)
         if not normalized:
             continue
-        if normalized == base_url.rstrip("/"):
+        if normalized.rstrip("/") == normalized_base:
             continue
         if not _is_same_site_family(base_url, normalized):
             continue
-        items.append({"url": normalized, "external_id": ""})
-    return _dedupe_items(items, max_items=max_items)
+        path = urlparse(normalized).path.rstrip("/") or "/"
+        if path.lower() in generic_paths:
+            continue
+        link_text = link.get_text(" ", strip=True)
+        score = 0
+        if link.find_parent("article") is not None:
+            score += 5
+        if link.find_parent(["h1", "h2", "h3"]) is not None:
+            score += 3
+        if len(link_text.split()) >= 4:
+            score += 2
+        if re.search(r"/20\d{2}/(?:0?[1-9]|1[0-2])(?:/|$)", path, re.IGNORECASE):
+            score += 2
+        if any(segment in path.lower() for segment in ("/blog/", "/news/", "/post", "/research/", "/engineering/")):
+            score += 1
+        ranked_items.append((score, ordinal, {"url": normalized, "external_id": "", "title": link_text}))
+    ranked_items.sort(key=lambda value: (-value[0], value[1]))
+    return _dedupe_items([item for _, _, item in ranked_items], max_items=max_items)
 
 
 def discover_candidate_items(

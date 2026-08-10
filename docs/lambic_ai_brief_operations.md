@@ -105,8 +105,11 @@ The host runner script:
 - maps `CONTEXT_API_BEARER_TOKEN` to `CONTEXT_API_TOKEN`
 - points publish output to `/srv/lambic/apps/lambic-labs-site`
 - bootstraps a local `.venv_publish` and installs `requirements.txt` on first run
+- reconciles the curated source list, disables replaced and private-address sources, and repairs up to 250 recent missing OpenAI embeddings before generation
+- serializes publish attempts with `flock`, so GitHub Actions and the host fallback cannot mutate the website checkout concurrently
+- writes structured success or blocked-preflight reports under `/srv/lambic/logs/brainos-reports` by default
 - runs `backfill-missing` over a rolling 8-day UTC window so delayed ingestion can still produce missing issues
-- retries any still-missing dates in that window with backfill-safe minimum thresholds (`DAILY_DIGEST_BACKFILL_MIN_ITEMS`, `DAILY_DIGEST_BACKFILL_MIN_SOURCE_COUNT`) and optional fallback lookback (`DAILY_DIGEST_BACKFILL_FALLBACK_LOOKBACK_DAYS`)
+- retries any still-missing dates even when the strict pass exits non-zero, using backfill-safe minimum thresholds (`DAILY_DIGEST_BACKFILL_MIN_ITEMS`, `DAILY_DIGEST_BACKFILL_MIN_SOURCE_COUNT`) and optional fallback lookback (`DAILY_DIGEST_BACKFILL_FALLBACK_LOOKBACK_DAYS`)
 
 ## Expected outputs
 

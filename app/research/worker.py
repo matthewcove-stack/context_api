@@ -16,6 +16,7 @@ from app.research.enrichment import derive_evidence_relations, enrich_chunks, en
 from app.research.hygiene import detect_junk_document
 from app.research.ids import compute_document_id
 from app.research.pdf_extract import extract_pdf_text
+from app.research.url_safety import source_url_allowed
 from app.storage.db import (
     append_research_run_error,
     claim_next_research_ingestion_run,
@@ -163,12 +164,32 @@ def _process_source(
     reembed_budget = _int_env("RESEARCH_REEMBED_MAX_PER_RUN", 25)
     reembedded = 0
 
-    counters: Dict[str, Any] = {"seen": 0, "new": 0, "deduped": 0, "failed": 0}
+    counters: Dict[str, Any] = {
+        "seen": 0,
+        "new": 0,
+        "deduped": 0,
+        "succeeded": 0,
+        "suppressed": 0,
+        "failed": 0,
+        "source_failed": False,
+    }
     source_error = ""
+    if not source_url_allowed(base_url):
+        counters["failed"] += 1
+        counters["source_failed"] = True
+        source_error = "private_source_url_blocked"
+        append_research_run_error(
+            engine,
+            run_id=run_id,
+            message=f"private_source_url_blocked source_id={source_id} url={base_url}",
+        )
+        counters["source_error"] = source_error
+        return counters
     source_fetch = _fetch_with_retries(base_url)
     source_status = int(source_fetch.get("status_code") or 0)
     if source_status >= 400:
         counters["failed"] += 1
+        counters["source_failed"] = True
         source_error = f"source_fetch_failed status={source_status}"
         append_research_run_error(
             engine,
@@ -400,6 +421,7 @@ def _process_source(
             fetch_fallback=str((get_research_document(engine, document_id=document_id) or {}).get("fetch_meta", {}).get("fallback") or ""),
         )
         if junk_reason:
+            counters["suppressed"] += 1
             set_research_document_suppressed(
                 engine,
                 document_id=document_id,
@@ -493,6 +515,7 @@ def _process_source(
                 message=f"embedding_failed source_id={source_id} url={item_url} error={exc}",
             )
             continue
+        counters["succeeded"] += 1
 
     set_research_source_polled(engine, source_id=source_id)
     counters["source_error"] = source_error
@@ -514,7 +537,18 @@ def process_run(engine: Any, run: Dict[str, Any]) -> None:
     cooldown_minutes = _int_env("RESEARCH_SOURCE_COOLDOWN_MINUTES", 60)
     run_new_item_budget = _int_env("RESEARCH_RUN_MAX_NEW_ITEMS", 0)
     run_new_items = 0
+    total_handled = 0
+    total_failed = 0
     try:
+        if not sources:
+            append_research_run_error(
+                engine,
+                run_id=run_id,
+                message=f"run_failed no_enabled_sources topic_key={topic_key}",
+            )
+            mark_research_ingestion_run_finished(engine, run_id=run_id, status="failed")
+            _safe_log("research_run_failed", run_id=str(run_id), topic_key=topic_key, error="no_enabled_sources")
+            return
         for source in sources:
             source_id = str(source.get("source_id") or "")
             remaining_budget = 0
@@ -542,8 +576,14 @@ def process_run(engine: Any, run: Dict[str, Any]) -> None:
                 items_failed=counters["failed"],
             )
             run_new_items += int(counters["new"])
+            handled = int(counters["deduped"]) + int(counters["succeeded"]) + int(counters["suppressed"])
+            total_handled += handled
+            total_failed += int(counters["failed"])
             if source_id:
-                if int(counters["failed"]) > 0:
+                source_unhealthy = bool(counters.get("source_failed")) or (
+                    int(counters["failed"]) > 0 and handled == 0
+                )
+                if source_unhealthy:
                     mark_research_source_failure(
                         engine,
                         source_id=source_id,
@@ -560,8 +600,15 @@ def process_run(engine: Any, run: Dict[str, Any]) -> None:
                     message=f"run_budget_exhausted max_new_items={run_new_item_budget}",
                 )
                 break
-        mark_research_ingestion_run_finished(engine, run_id=run_id, status="completed")
-        _safe_log("research_run_completed", run_id=str(run_id), topic_key=topic_key)
+        final_status = "failed" if total_failed > 0 and total_handled == 0 else "completed"
+        mark_research_ingestion_run_finished(engine, run_id=run_id, status=final_status)
+        _safe_log(
+            f"research_run_{final_status}",
+            run_id=str(run_id),
+            topic_key=topic_key,
+            handled=total_handled,
+            failed=total_failed,
+        )
     except Exception as exc:  # pragma: no cover - defensive runtime path
         append_research_run_error(engine, run_id=run_id, message=f"run_failed error={exc}")
         mark_research_ingestion_run_finished(engine, run_id=run_id, status="failed")
@@ -607,9 +654,24 @@ def run_once(engine: Any) -> bool:
     return True
 
 
+def drain_due_runs(engine: Any, *, max_runs: int = 10) -> int:
+    enqueue_due_schedule_runs(engine)
+    processed = 0
+    while processed < max(max_runs, 1) and run_once(engine):
+        processed += 1
+    return processed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Research ingestion worker (stub)")
-    parser.add_argument("--once", action="store_true", help="Run one loop iteration and exit")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--once", action="store_true", help="Process one already queued run and exit")
+    mode.add_argument(
+        "--drain-due",
+        action="store_true",
+        help="Enqueue due scheduled sources, process queued runs, and exit",
+    )
+    parser.add_argument("--max-runs", type=int, default=10, help="Maximum runs to process with --drain-due")
     parser.add_argument("--sleep-seconds", type=int, default=5)
     args = parser.parse_args()
 
@@ -622,6 +684,11 @@ def main() -> None:
     if not database_url:
         raise RuntimeError("DATABASE_URL is not set")
     engine = create_db_engine(database_url)
+
+    if args.drain_due:
+        processed = drain_due_runs(engine, max_runs=args.max_runs)
+        _safe_log("research_due_runs_drained", processed=processed, max_runs=max(args.max_runs, 1))
+        return
 
     while True:
         processed = run_once(engine)

@@ -100,7 +100,7 @@ def test_phase6_source_cooldown_and_schedule_backpressure(monkeypatch) -> None:
     status = client.get(f"/v2/research/ingest/runs/{run_id}", headers=headers)
     assert status.status_code == 200
     payload = status.json()
-    assert payload["status"] == "completed"
+    assert payload["status"] == "failed"
     assert payload["counters"]["items_failed"] >= 1
 
     policy = get_research_source_policy(engine, source_id=source_id)

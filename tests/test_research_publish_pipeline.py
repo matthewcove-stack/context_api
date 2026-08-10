@@ -228,11 +228,13 @@ def test_publish_pipeline_blocks_daily_publish_when_candidate_preflight_fails(
             "evaluated": True,
             "minimum_required_items": 4,
             "enough_candidates": False,
-            "error": "only 2 strong items found for 2026-03-12",
+            "error": "only 2 eligible items found for 2026-03-12",
         },
     )
+    report_dir = tmp_path / "reports"
+    monkeypatch.setenv("BRIEF_PUBLISH_REPORT_DIR", str(report_dir))
 
-    with pytest.raises(BriefPublishError, match="only 2 strong items found"):
+    with pytest.raises(BriefPublishError, match="only 2 eligible items found"):
         execute_publish(
             request=GeneratorRequest(
                 mode="daily",
@@ -245,6 +247,9 @@ def test_publish_pipeline_blocks_daily_publish_when_candidate_preflight_fails(
             digest_settings=digest_settings,
             distribution_settings=distribution_settings,
         )
+    report_paths = list(report_dir.glob("*.json"))
+    assert len(report_paths) == 1
+    assert '"status": "blocked"' in report_paths[0].read_text(encoding="utf-8")
 
 
 def test_publish_pipeline_dry_run_skips_when_candidate_preflight_fails(

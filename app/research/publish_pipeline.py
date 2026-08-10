@@ -125,7 +125,7 @@ def _candidate_readiness(
         "enough_candidates": len(selected) >= settings.min_items,
     }
     if not readiness["enough_candidates"]:
-        readiness["error"] = f"only {len(selected)} strong items found for {target_date.isoformat()}"
+        readiness["error"] = f"only {len(selected)} eligible items found for {target_date.isoformat()}"
     return readiness
 
 
@@ -285,7 +285,21 @@ def execute_publish(
         and candidate_readiness.get("evaluated")
         and candidate_readiness.get("enough_candidates") is False
     ):
-        raise BriefPublishError(candidate_readiness.get("error") or "Not enough strong candidates for publish")
+        blocked_report = {
+            "status": "blocked",
+            "mode": request.mode,
+            "dry_run": request.dry_run,
+            "started_at": started_at.isoformat(),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "preflight": preflight,
+            "generated_dates": [],
+            "pushed": False,
+        }
+        report_path = _maybe_write_publish_report(blocked_report)
+        message = candidate_readiness.get("error") or "Not enough eligible candidates for publish"
+        if report_path:
+            message = f"{message}; report={report_path}"
+        raise BriefPublishError(message)
 
     with prepare_publish_workspace(paths, dry_run=request.dry_run) as workspace:
         workspace_digest_settings, workspace_distribution_settings = _coerce_settings_for_workspace(

@@ -14,7 +14,10 @@ Phase 4: ChatGPT Actions integration (read-only OpenAPI + deployment docs).
 ## Quick commands
 - Setup: `cp .env.example .env`
 - Run: `docker compose up --build`
-- Tests: `docker compose run --rm api pytest`
+- Tests: `make test` (uses a disposable `context_test` Postgres instance)
+
+Tests fail closed when `DATABASE_URL` names a non-test database. Do not run raw
+`docker compose run --rm api pytest` against the persistent `context` database.
 
 ## Required env vars
 - `DATABASE_URL`

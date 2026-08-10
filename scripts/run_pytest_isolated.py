@@ -31,6 +31,20 @@ def _wait_for_port(host: str, port: int, *, timeout_s: float = 30.0) -> None:
     raise RuntimeError(f"Timed out waiting for Postgres on {host}:{port}")
 
 
+def _wait_for_postgres(container_name: str, *, timeout_s: float = 30.0) -> None:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        result = _run(
+            ["docker", "exec", container_name, "pg_isready", "-U", "context", "-d", "context_test"],
+            check=False,
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            return
+        time.sleep(0.5)
+    raise RuntimeError(f"Timed out waiting for Postgres container {container_name}")
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -42,16 +56,17 @@ def main() -> None:
     args, pytest_args = parser.parse_known_args()
 
     repo_root = Path(__file__).resolve().parent.parent
-    env_file = repo_root / ".env"
-    if not env_file.exists():
-        raise RuntimeError("context_api/.env is required; run scripts/sync_runtime_env.py first")
-
-    container_name = f"context-api-test-db-{uuid.uuid4().hex[:8]}"
+    run_suffix = uuid.uuid4().hex[:8]
+    container_name = f"context-api-test-db-{run_suffix}"
+    network_name = f"context-api-test-{run_suffix}"
+    image_tag = "context-api-test-runner:local"
     port = _free_port()
-    db_url = f"postgresql+psycopg://context:context@host.docker.internal:{port}/context_test"
+    db_url = "postgresql+psycopg://context:context@test-db:5432/context_test"
     pytest_args = pytest_args or ["tests"]
 
     try:
+        _run(["docker", "network", "create", network_name], cwd=repo_root)
+        _run(["docker", "build", "-q", "-t", image_tag, "."], cwd=repo_root)
         _run(
             [
                 "docker",
@@ -60,6 +75,10 @@ def main() -> None:
                 "-d",
                 "--name",
                 container_name,
+                "--network",
+                network_name,
+                "--network-alias",
+                "test-db",
                 "-e",
                 "POSTGRES_DB=context_test",
                 "-e",
@@ -73,21 +92,19 @@ def main() -> None:
             cwd=repo_root,
         )
         _wait_for_port("127.0.0.1", port)
+        _wait_for_postgres(container_name)
         _run(
             [
                 "docker",
-                "compose",
-                "--env-file",
-                ".env",
-                "-f",
-                "docker-compose.yml",
                 "run",
                 "--rm",
+                "--network",
+                network_name,
                 "-e",
                 f"DATABASE_URL={db_url}",
                 "-e",
-                "CONTEXT_API_TEST_ALLOW_DB_RESET=true",
-                "api",
+                "CONTEXT_API_TOKEN=test-token",
+                image_tag,
                 "alembic",
                 "upgrade",
                 "head",
@@ -97,18 +114,19 @@ def main() -> None:
         _run(
             [
                 "docker",
-                "compose",
-                "--env-file",
-                ".env",
-                "-f",
-                "docker-compose.yml",
                 "run",
                 "--rm",
+                "--network",
+                network_name,
                 "-e",
                 f"DATABASE_URL={db_url}",
                 "-e",
-                "CONTEXT_API_TEST_ALLOW_DB_RESET=true",
-                "api",
+                "CONTEXT_API_TOKEN=test-token",
+                "-e",
+                "RESEARCH_EMBEDDING_MODEL=hash-64",
+                "-e",
+                "RESEARCH_ALLOW_HASH_EMBEDDINGS=true",
+                image_tag,
                 "pytest",
                 *pytest_args,
             ],
@@ -116,6 +134,7 @@ def main() -> None:
         )
     finally:
         _run(["docker", "rm", "-f", container_name], check=False, capture_output=True)
+        _run(["docker", "network", "rm", network_name], check=False, capture_output=True)
 
 
 if __name__ == "__main__":

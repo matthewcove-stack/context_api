@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 
 from app.research.embeddings import resolve_embedding_runtime
@@ -49,15 +50,16 @@ def main() -> None:
             processed += 1
         except Exception as exc:
             failed += 1
-            print({"document_id": str(row["document_id"]), "status": "failed", "error": str(exc)})
+            print(json.dumps({"document_id": str(row["document_id"]), "status": "failed", "error": str(exc)}))
     print(
-        {
+        json.dumps({
             "topic_key": args.topic_key.strip().lower(),
             "embedding_model_id": embedding_model_id,
             "requested_limit": max(args.limit, 1),
+            "selected": len(rows),
             "processed": processed,
             "failed": failed,
-        }
+        })
     )
 
 

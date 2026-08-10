@@ -91,6 +91,7 @@ from app.research.contracts import (
 from app.research.embeddings import embed_texts, resolve_embedding_runtime
 from app.research.scoring import blend_score, cosine_similarity, embedding_score, lexical_score, recency_score, source_weight_score
 from app.research.ids import compute_source_id
+from app.research.url_safety import source_url_allowed
 from app.dashboard import (
     build_inbox,
     build_project_workspace,
@@ -1571,6 +1572,11 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
         canonical_base = canonicalize_url(payload.base_url)
         if not canonical_base:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid base_url")
+        if not source_url_allowed(canonical_base):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Private and loopback research source URLs are disabled",
+            )
         source_id = compute_source_id(
             topic_key=payload.topic_key,
             kind=payload.kind,

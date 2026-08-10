@@ -1984,11 +1984,19 @@ def list_research_documents_for_reembed(
         JOIN research_sources s
           ON s.source_id = d.source_id
         WHERE s.topic_key = :topic_key
-          AND d.status IN ('embedded', 'extracted')
+          AND d.status IN ('embedded', 'extracted', 'enriched', 'failed')
           AND coalesce(d.suppressed, false) = false
           AND coalesce(d.extracted_text, '') <> ''
-          AND coalesce(d.embedding_model_id, '') <> :embedding_model_id
-        ORDER BY coalesce(d.embedded_at, d.extracted_at, d.discovered_at) ASC, d.document_id ASC
+          AND (
+              coalesce(d.embedding_model_id, '') <> :embedding_model_id
+              OR NOT EXISTS (
+                  SELECT 1
+                  FROM research_embeddings e
+                  WHERE e.document_id = d.document_id
+                    AND e.embedding_model_id = :embedding_model_id
+              )
+          )
+        ORDER BY coalesce(d.published_at, d.discovered_at, d.extracted_at) DESC, d.document_id ASC
         LIMIT :limit
     """
     params = {

@@ -4,22 +4,35 @@ import os
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.engine import make_url
 
 
 @pytest.fixture(autouse=True)
 def configure_research_embedding_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RESEARCH_EMBEDDING_MODEL", os.environ.get("RESEARCH_EMBEDDING_MODEL", "hash-64"))
     monkeypatch.setenv("RESEARCH_ALLOW_HASH_EMBEDDINGS", os.environ.get("RESEARCH_ALLOW_HASH_EMBEDDINGS", "true"))
+    monkeypatch.setenv("RESEARCH_ALLOW_PRIVATE_SOURCE_URLS", "true")
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    database_url = os.environ.get("DATABASE_URL", "").strip()
+    if not database_url:
+        return
+    try:
+        database_name = (make_url(database_url).database or "").lower()
+    except Exception as exc:
+        raise pytest.UsageError(f"Unable to validate DATABASE_URL for tests: {exc}") from exc
+    if "test" not in database_name:
+        raise pytest.UsageError(
+            "Refusing to run tests against a non-test database. "
+            "Use `make test` or `python scripts/run_pytest_isolated.py`."
+        )
 
 
 @pytest.fixture(autouse=True)
 def reset_database() -> None:
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
-        return
-    allow_reset = os.environ.get("CONTEXT_API_TEST_ALLOW_DB_RESET", "").strip().lower() in {"1", "true", "yes"}
-    lowered_url = database_url.lower()
-    if not allow_reset and all(token not in lowered_url for token in ("_test", "test_", "/test", "localhost:5543")):
         return
     engine = sa.create_engine(database_url, future=True)
     with engine.begin() as conn:

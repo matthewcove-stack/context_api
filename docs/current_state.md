@@ -45,11 +45,16 @@
   - Run-level backpressure budget (`RESEARCH_RUN_MAX_NEW_ITEMS`) stops runaway ingestion growth.
   - PDF-aware extraction path for research documents (`application/pdf`).
   - Env-driven scoring weight knobs for relevance tuning.
+  - Partial item failures no longer cool down otherwise healthy sources; runs fail when every selected source fails.
+  - Private and loopback source URLs are rejected unless explicitly enabled for isolated tests.
+  - Scheduled drain mode enqueues due sources before claiming work.
 - Bootstrap loop closure:
   - `POST /v2/research/sources/bootstrap` for source suggestion ingestion + optional run trigger.
   - `GET /v2/research/bootstrap/status` for latest onboarding/run rollup per topic.
   - `research_bootstrap_events` audit table for bootstrap requests/results.
-- Dockerized test workflow (`docker compose run --rm api pytest`).
+- Isolated Dockerized test workflow (`make test` or `python scripts/run_pytest_isolated.py`) with a disposable `context_test` database and a fail-closed pytest database guard.
+- Curated-source validation and feed-first collection for stable publisher feeds.
+- Daily Brief maintenance reconciles sources, repairs recent missing embeddings, records blocked-preflight reports, and executes the documented bounded fallback after a strict miss.
 
 ## Implemented in this phase
 - New tables:

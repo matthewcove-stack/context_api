@@ -134,7 +134,8 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 ## Quick commands
 - Setup: `python scripts/sync_runtime_env.py` or `cp .env.example .env`
 - Run: `make up` (now always includes the edge overlay so `http://context-api.localhost` stays routed through Traefik)
-- Tests: `docker compose run --rm api pytest`
+- Tests: `make test` (or `python scripts/run_pytest_isolated.py`; both use a disposable `context_test` database)
+- Safety: pytest refuses any configured database whose name does not contain `test`, preventing fixture sources and truncation from reaching the persistent corpus.
 - Smoke loop (PowerShell): `powershell -ExecutionPolicy Bypass -File scripts/bootstrap_smoke.ps1 -BaseUrl http://localhost:8001 -Token change-me -TopicKey smoke_topic -FeedUrl https://example.com/feed`
 - Warning: if you start the API with plain `docker compose -f docker-compose.yml up`, the app now logs an explicit warning that edge routing is disabled and `context-api.localhost` will not work until it is started with `compose.edge.yml`
 
@@ -159,4 +160,3 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 - `scripts/sync_runtime_env.py` copies the Brain OS bearer token, OpenAI key, embedding config, and persistent Postgres path from `../brain_os/.env` into `context_api/.env`.
 - `make dev` and `make up` run that sync step first, then launch Docker with `--env-file .env`.
 - The API refuses to start when `CONTEXT_API_EXPECT_PERSISTENT_CORPUS=true` and the connected corpus is unexpectedly small. This prevents silently booting against a fresh empty local Postgres volume.
-

@@ -5,14 +5,21 @@ import os
 from typing import Any
 
 from app.research.ids import compute_source_id
-from app.storage.db import create_db_engine, create_research_ingestion_run, upsert_research_source
+from app.research.url_safety import is_private_source_url
+from app.storage.db import (
+    create_db_engine,
+    create_research_ingestion_run,
+    list_research_sources,
+    set_research_source_enabled,
+    upsert_research_source,
+)
 
 
 CURATED_SOURCES: list[dict[str, Any]] = [
     {
         "kind": "site_map",
         "name": "OpenAI Sitemap",
-        "base_url": "https://openai.com/sitemap.xml",
+        "base_url": "https://openai.com/sitemap.xml/research/",
         "tags": ["openai", "research", "announcements"],
         "publisher_type": "vendor",
         "source_class": "external_primary",
@@ -37,9 +44,9 @@ CURATED_SOURCES: list[dict[str, Any]] = [
         "default_decision_domains": ["agent_workflows", "ai_product_engineering", "evals"],
     },
     {
-        "kind": "html_listing",
+        "kind": "rss",
         "name": "Google AI Blog",
-        "base_url": "https://blog.google/technology/ai/",
+        "base_url": "https://blog.google/innovation-and-ai/technology/ai/rss/",
         "tags": ["google", "research", "industry"],
         "publisher_type": "vendor",
         "source_class": "external_primary",
@@ -55,9 +62,9 @@ CURATED_SOURCES: list[dict[str, Any]] = [
         "default_decision_domains": ["evals", "agent_workflows", "data_modeling"],
     },
     {
-        "kind": "html_listing",
+        "kind": "rss",
         "name": "Hugging Face Blog",
-        "base_url": "https://huggingface.co/blog",
+        "base_url": "https://huggingface.co/blog/feed.xml",
         "tags": ["huggingface", "open-source", "tooling"],
         "publisher_type": "vendor",
         "source_class": "external_primary",
@@ -73,9 +80,9 @@ CURATED_SOURCES: list[dict[str, Any]] = [
         "default_decision_domains": ["evals", "frontend", "ai_product_engineering"],
     },
     {
-        "kind": "html_listing",
+        "kind": "rss",
         "name": "Microsoft Research Blog",
-        "base_url": "https://www.microsoft.com/en-us/research/blog/",
+        "base_url": "https://www.microsoft.com/en-us/research/feed/",
         "tags": ["microsoft", "research", "engineering"],
         "publisher_type": "vendor",
         "source_class": "external_primary",
@@ -118,36 +125,36 @@ CURATED_SOURCES: list[dict[str, Any]] = [
         "default_decision_domains": ["retrieval", "agent_workflows", "evals"],
     },
     {
-        "kind": "html_listing",
+        "kind": "rss",
         "name": "TechCrunch AI",
-        "base_url": "https://techcrunch.com/category/artificial-intelligence/",
+        "base_url": "https://techcrunch.com/category/artificial-intelligence/feed/",
         "tags": ["news", "industry", "commentary"],
         "publisher_type": "media",
         "source_class": "external_secondary",
         "default_decision_domains": ["ai_product_engineering", "market"],
     },
     {
-        "kind": "html_listing",
+        "kind": "atom",
         "name": "Simon Willison LLMs",
-        "base_url": "https://simonwillison.net/tags/llms/",
+        "base_url": "https://simonwillison.net/atom/everything/",
         "tags": ["llms", "tooling", "commentary"],
         "publisher_type": "independent",
         "source_class": "external_commentary",
         "default_decision_domains": ["agent_workflows", "ai_product_engineering"],
     },
     {
-        "kind": "html_listing",
+        "kind": "rss",
         "name": "Latent Space",
-        "base_url": "https://www.latent.space/",
+        "base_url": "https://www.latent.space/feed",
         "tags": ["agents", "commentary", "engineering"],
         "publisher_type": "independent",
         "source_class": "external_commentary",
         "default_decision_domains": ["agent_workflows", "ai_product_engineering"],
     },
     {
-        "kind": "html_listing",
+        "kind": "rss",
         "name": "Import AI Newsletter",
-        "base_url": "https://importai.substack.com/archive",
+        "base_url": "https://importai.substack.com/feed",
         "tags": ["news", "policy", "commentary"],
         "publisher_type": "independent",
         "source_class": "external_commentary",
@@ -156,16 +163,16 @@ CURATED_SOURCES: list[dict[str, Any]] = [
     {
         "kind": "html_listing",
         "name": "LangChain Blog",
-        "base_url": "https://blog.langchain.dev/",
+        "base_url": "https://www.langchain.com/blog",
         "tags": ["langchain", "langgraph", "agents", "frameworks"],
         "publisher_type": "vendor",
         "source_class": "external_primary",
         "default_decision_domains": ["agent_workflows", "ai_product_engineering", "retrieval"],
     },
     {
-        "kind": "html_listing",
+        "kind": "rss",
         "name": "Model Context Protocol Blog",
-        "base_url": "https://blog.modelcontextprotocol.io/",
+        "base_url": "https://blog.modelcontextprotocol.io/index.xml",
         "tags": ["mcp", "protocol", "agents", "tooling"],
         "publisher_type": "independent",
         "source_class": "external_primary",
@@ -183,6 +190,20 @@ CURATED_SOURCES: list[dict[str, Any]] = [
 ]
 
 
+REPLACED_SOURCES: list[dict[str, str]] = [
+    {"kind": "site_map", "base_url": "https://openai.com/sitemap.xml"},
+    {"kind": "html_listing", "base_url": "https://blog.google/technology/ai/"},
+    {"kind": "html_listing", "base_url": "https://huggingface.co/blog"},
+    {"kind": "html_listing", "base_url": "https://www.microsoft.com/en-us/research/blog/"},
+    {"kind": "html_listing", "base_url": "https://techcrunch.com/category/artificial-intelligence/"},
+    {"kind": "html_listing", "base_url": "https://simonwillison.net/tags/llms/"},
+    {"kind": "html_listing", "base_url": "https://www.latent.space/"},
+    {"kind": "html_listing", "base_url": "https://importai.substack.com/archive"},
+    {"kind": "html_listing", "base_url": "https://blog.langchain.dev/"},
+    {"kind": "html_listing", "base_url": "https://blog.modelcontextprotocol.io/"},
+]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Bootstrap the ai_research source set directly into the context_api database.")
     parser.add_argument("--topic-key", default="ai_research")
@@ -191,6 +212,11 @@ def main() -> None:
     parser.add_argument("--max-items-per-run", type=int, default=25)
     parser.add_argument("--rate-limit-per-hour", type=int, default=60)
     parser.add_argument("--poll-interval-minutes", type=int, default=240)
+    parser.add_argument(
+        "--disable-private-sources",
+        action="store_true",
+        help="Disable enabled loopback or private-address sources for this topic",
+    )
     args = parser.parse_args()
 
     database_url = os.getenv("DATABASE_URL", "").strip()
@@ -223,6 +249,22 @@ def main() -> None:
             source_weight=1.0 if str(source["source_class"]) == "external_primary" else 0.8 if str(source["source_class"]) == "external_secondary" else 0.6,
         )
         print({"name": source["name"], "source_id": source_id, "status": result["status"]})
+
+    for source in REPLACED_SOURCES:
+        legacy_id = compute_source_id(
+            topic_key=topic_key,
+            kind=source["kind"],
+            base_url=source["base_url"],
+        )
+        if legacy_id not in source_ids and set_research_source_enabled(engine, source_id=legacy_id, enabled=False):
+            print({"source_id": legacy_id, "status": "disabled-replaced"})
+
+    if args.disable_private_sources:
+        for source in list_research_sources(engine, topic_key=topic_key, enabled_only=True):
+            base_url = str(source.get("base_url_canonical") or source.get("base_url_original") or "")
+            if is_private_source_url(base_url):
+                set_research_source_enabled(engine, source_id=str(source["source_id"]), enabled=False)
+                print({"source_id": str(source["source_id"]), "status": "disabled-private"})
 
     if args.enqueue_run:
         run = create_research_ingestion_run(

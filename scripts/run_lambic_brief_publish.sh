@@ -19,9 +19,23 @@ require_cmd() {
 }
 
 require_cmd docker
+require_cmd flock
 require_cmd git
 require_cmd npm
 require_cmd "${PYTHON_BIN}"
+
+PUBLISH_LOCK_FILE="${BRIEF_PUBLISH_LOCK_FILE:-/tmp/lambic-ai-brief-publish.lock}"
+if [[ "${BRIEF_PUBLISH_LOCK_HELD:-false}" != "true" ]]; then
+  if [[ ! -e "${PUBLISH_LOCK_FILE}" ]]; then
+    (umask 022; : >"${PUBLISH_LOCK_FILE}")
+  fi
+  exec 9<"${PUBLISH_LOCK_FILE}"
+  if ! flock -n 9; then
+    echo "Another Lambic AI Brief publish is already running; skipping." >&2
+    exit 0
+  fi
+  export BRIEF_PUBLISH_LOCK_HELD=true
+fi
 
 if [[ -r "${BRAIN_OS_ENV_FILE}" ]]; then
   set -a
@@ -93,6 +107,17 @@ export BRIEF_WEBSITE_REPO="${WEBSITE_REPO}"
 export DAILY_DIGEST_GIT_REMOTE="${DAILY_DIGEST_GIT_REMOTE:-origin}"
 export DAILY_DIGEST_GIT_BRANCH="${DAILY_DIGEST_GIT_BRANCH:-main}"
 export DAILY_DIGEST_TOPIC_KEY="${DAILY_DIGEST_TOPIC_KEY:-ai_research}"
+export BRIEF_PUBLISH_REPORT_DIR="${BRIEF_PUBLISH_REPORT_DIR:-/srv/lambic/logs/brainos-reports}"
+
+mkdir -p "${BRIEF_PUBLISH_REPORT_DIR}"
 
 cd "${REPO_ROOT}"
+if [[ "${BRIEF_MAINTAIN_RESEARCH_CORPUS:-true}" == "true" ]]; then
+  "${PUBLISH_VENV_DIR}/bin/python" scripts/bootstrap_ai_research_sources.py \
+    --topic-key "${DAILY_DIGEST_TOPIC_KEY}" \
+    --disable-private-sources
+  "${PUBLISH_VENV_DIR}/bin/python" scripts/reembed_research_documents.py \
+    --topic-key "${DAILY_DIGEST_TOPIC_KEY}" \
+    --limit "${BRIEF_REPAIR_EMBEDDING_LIMIT:-250}"
+fi
 "${PUBLISH_VENV_DIR}/bin/python" scripts/publish_lambic_ai_brief.py "$@"
