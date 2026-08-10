@@ -113,11 +113,11 @@ mkdir -p "${BRIEF_PUBLISH_REPORT_DIR}"
 
 cd "${REPO_ROOT}"
 if [[ "${BRIEF_MAINTAIN_RESEARCH_CORPUS:-true}" == "true" ]]; then
-  "${PUBLISH_VENV_DIR}/bin/python" scripts/bootstrap_ai_research_sources.py \
+  "${PUBLISH_VENV_DIR}/bin/python" -m scripts.bootstrap_ai_research_sources \
     --topic-key "${DAILY_DIGEST_TOPIC_KEY}" \
     --disable-private-sources
-  "${PUBLISH_VENV_DIR}/bin/python" scripts/reembed_research_documents.py \
+  "${PUBLISH_VENV_DIR}/bin/python" -m scripts.reembed_research_documents \
     --topic-key "${DAILY_DIGEST_TOPIC_KEY}" \
     --limit "${BRIEF_REPAIR_EMBEDDING_LIMIT:-250}"
 fi
-"${PUBLISH_VENV_DIR}/bin/python" scripts/publish_lambic_ai_brief.py "$@"
+"${PUBLISH_VENV_DIR}/bin/python" -m scripts.publish_lambic_ai_brief "$@"
