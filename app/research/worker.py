@@ -41,10 +41,20 @@ from app.storage.db import (
     replace_research_embeddings,
     set_research_document_suppressed,
     set_research_source_polled,
+    touch_research_ingestion_run,
     update_research_run_counters,
     upsert_research_document_seed,
 )
 logger = logging.getLogger(__name__)
+
+
+class ResearchRunInactive(RuntimeError):
+    """Raised when another worker or watchdog has already closed this run."""
+
+
+def _heartbeat_run(engine: Any, *, run_id: Any) -> None:
+    if not touch_research_ingestion_run(engine, run_id=run_id):
+        raise ResearchRunInactive(f"research run {run_id} is no longer active")
 
 
 def _safe_log(message: str, **kwargs: Any) -> None:
@@ -174,6 +184,7 @@ def _process_source(
         "source_failed": False,
     }
     source_error = ""
+    _heartbeat_run(engine, run_id=run_id)
     if not source_url_allowed(base_url):
         counters["failed"] += 1
         counters["source_failed"] = True
@@ -208,6 +219,7 @@ def _process_source(
     )
     last_request_at: float | None = None
     for item in discovered:
+        _heartbeat_run(engine, run_id=run_id)
         if max_new_items > 0 and counters["new"] >= max_new_items:
             break
         item_url = str(item.get("url") or "").strip()
@@ -609,6 +621,8 @@ def process_run(engine: Any, run: Dict[str, Any]) -> None:
             handled=total_handled,
             failed=total_failed,
         )
+    except ResearchRunInactive as exc:
+        _safe_log("research_run_inactive", run_id=str(run_id), topic_key=topic_key, error=str(exc))
     except Exception as exc:  # pragma: no cover - defensive runtime path
         append_research_run_error(engine, run_id=run_id, message=f"run_failed error={exc}")
         mark_research_ingestion_run_finished(engine, run_id=run_id, status="failed")

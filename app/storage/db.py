@@ -1056,6 +1056,19 @@ def update_research_run_counters(
         )
 
 
+def touch_research_ingestion_run(engine: Engine, *, run_id: Any) -> bool:
+    """Refresh a live run heartbeat and report whether it is still active."""
+    sql = """
+        UPDATE research_ingestion_runs
+        SET updated_at = now()
+        WHERE run_id = :run_id
+          AND status = 'running'
+    """
+    with engine.begin() as conn:
+        result = conn.execute(text(sql), {"run_id": run_id})
+    return int(result.rowcount or 0) == 1
+
+
 def append_research_run_error(
     engine: Engine,
     *,
