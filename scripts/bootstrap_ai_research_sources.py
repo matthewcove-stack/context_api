@@ -71,15 +71,6 @@ CURATED_SOURCES: list[dict[str, Any]] = [
         "default_decision_domains": ["ai_product_engineering", "agent_workflows", "retrieval"],
     },
     {
-        "kind": "html_listing",
-        "name": "Meta AI Blog",
-        "base_url": "https://ai.meta.com/blog/",
-        "tags": ["meta", "research", "models"],
-        "publisher_type": "vendor",
-        "source_class": "external_primary",
-        "default_decision_domains": ["evals", "frontend", "ai_product_engineering"],
-    },
-    {
         "kind": "rss",
         "name": "Microsoft Research Blog",
         "base_url": "https://www.microsoft.com/en-us/research/feed/",
@@ -87,15 +78,6 @@ CURATED_SOURCES: list[dict[str, Any]] = [
         "publisher_type": "vendor",
         "source_class": "external_primary",
         "default_decision_domains": ["retrieval", "agent_workflows", "ai_product_engineering"],
-    },
-    {
-        "kind": "html_listing",
-        "name": "OpenAI Resources",
-        "base_url": "https://developers.openai.com/resources",
-        "tags": ["openai", "developers", "agents", "codex"],
-        "publisher_type": "vendor",
-        "source_class": "external_primary",
-        "default_decision_domains": ["agent_workflows", "ai_product_engineering", "evals"],
     },
     {
         "kind": "rss",
@@ -178,15 +160,6 @@ CURATED_SOURCES: list[dict[str, Any]] = [
         "source_class": "external_primary",
         "default_decision_domains": ["agent_workflows", "ai_product_engineering", "data_modeling"],
     },
-    {
-        "kind": "html_listing",
-        "name": "LlamaIndex Blog",
-        "base_url": "https://www.llamaindex.ai/blog",
-        "tags": ["llamaindex", "rag", "agents", "frameworks"],
-        "publisher_type": "vendor",
-        "source_class": "external_primary",
-        "default_decision_domains": ["agent_workflows", "retrieval", "ai_product_engineering"],
-    },
 ]
 
 
@@ -201,6 +174,11 @@ REPLACED_SOURCES: list[dict[str, str]] = [
     {"kind": "html_listing", "base_url": "https://importai.substack.com/archive"},
     {"kind": "html_listing", "base_url": "https://blog.langchain.dev/"},
     {"kind": "html_listing", "base_url": "https://blog.modelcontextprotocol.io/"},
+    # These pages remain useful to people, but their current HTML/robots
+    # contracts do not yield documents through the strict automated collector.
+    {"kind": "html_listing", "base_url": "https://ai.meta.com/blog/"},
+    {"kind": "html_listing", "base_url": "https://developers.openai.com/resources"},
+    {"kind": "html_listing", "base_url": "https://www.llamaindex.ai/blog"},
 ]
 
 
