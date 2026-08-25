@@ -13,11 +13,17 @@ from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from app.research.brief_ops import resolve_website_repo_paths
+from app.research.editorial_review import (
+    EDITORIAL_WORKFLOW_VERSION,
+    EditorialFinding,
+    load_recent_digest_payloads,
+    review_digest_payload,
+)
 from app.storage.db import create_db_engine, search_research_document_chunks
 
 
@@ -210,13 +216,61 @@ class DraftDigestItem(BaseModel):
     engineering_takeaway: str
 
 
+class DraftDigestEditorial(BaseModel):
+    editorial_frame: str
+    builder_implication: str
+    watch_signal: str
+
+
 class DraftDigestContent(BaseModel):
     title: str
     intro: str
     summary: str
     issue_summary: str
     top_things: List[str] = Field(default_factory=list)
+    editorial: DraftDigestEditorial
     items: List[DraftDigestItem] = Field(default_factory=list)
+
+
+class DraftReviewNotes(BaseModel):
+    structural_findings: List[str] = Field(default_factory=list)
+    anti_ai_findings: List[str] = Field(default_factory=list)
+    material_edits: List[str] = Field(default_factory=list)
+
+    @field_validator("structural_findings", "anti_ai_findings", "material_edits", mode="before")
+    @classmethod
+    def _normalise_review_notes(cls, value: Any) -> List[str]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            value = [value]
+        notes: List[str] = []
+        for item in value:
+            if isinstance(item, str):
+                note = _normalize_whitespace(item)
+            elif isinstance(item, dict):
+                location = _normalize_whitespace(str(item.get("location") or ""))
+                detail = next(
+                    (
+                        _normalize_whitespace(str(item.get(key) or ""))
+                        for key in ("finding", "issue", "message", "edit", "change", "revision", "action")
+                        if item.get(key)
+                    ),
+                    "",
+                )
+                note = f"{location}: {detail}".strip(": ")
+                if not note:
+                    note = json.dumps(item, ensure_ascii=True, sort_keys=True)
+            else:
+                note = _normalize_whitespace(str(item))
+            if note:
+                notes.append(note)
+        return notes
+
+
+class ReviewedDraftEnvelope(BaseModel):
+    review: DraftReviewNotes
+    digest: DraftDigestContent
 
 
 class OutputDigestMetric(BaseModel):
@@ -248,6 +302,17 @@ class OutputDigestEditorial(BaseModel):
     editorialFrame: str
     builderImplication: str
     watchSignal: str
+
+
+class OutputDigestEditorialReview(BaseModel):
+    workflowVersion: str
+    status: Literal["passed"]
+    revisionCount: int
+    checkedFields: int
+    reviewedAt: str
+    structuralFindings: List[str] = Field(default_factory=list)
+    antiAiFindings: List[str] = Field(default_factory=list)
+    materialEdits: List[str] = Field(default_factory=list)
 
 
 class OutputDigestItem(BaseModel):
@@ -285,6 +350,7 @@ class OutputDigest(BaseModel):
     primaryCta: Optional[OutputDigestCta] = None
     secondaryCta: Optional[OutputDigestCta] = None
     editorial: Optional[OutputDigestEditorial] = None
+    editorialReview: Optional[OutputDigestEditorialReview] = None
     items: List[OutputDigestItem] = Field(default_factory=list)
 
 
@@ -566,38 +632,6 @@ def _build_fallback_top_things(*, topics: Sequence[str], items: Sequence[OutputD
     ]
 
 
-def _build_digest_editorial(
-    *,
-    topics: Sequence[str],
-    top_things: Sequence[str],
-    summary: str,
-    issue_summary: str,
-) -> OutputDigestEditorial:
-    primary_topic = topics[0] if topics else "recent AI system changes"
-    topic_phrase = ", ".join(topics[:3]) if topics else "recent AI system changes"
-    editorial_frame = _clean_sentence(
-        f"This issue is most useful as a decision surface for teams working on {topic_phrase}; the signal is in implementation choices, not announcement volume.",
-        minimum_words=10,
-        maximum_length=260,
-    ) or _clean_sentence(summary, minimum_words=10, maximum_length=260) or "This issue is most useful as an implementation-focused decision surface."
-    builder_implication = _clean_sentence(
-        top_things[0] if top_things else issue_summary,
-        minimum_words=6,
-        maximum_length=220,
-    ) or issue_summary
-    watch_seed = top_things[1] if len(top_things) > 1 else issue_summary
-    watch_signal = _clean_sentence(
-        f"Watch whether {primary_topic} signals keep turning into repeatable workflows, release gates, or operating constraints rather than staying as isolated demos. {watch_seed}",
-        minimum_words=12,
-        maximum_length=260,
-    ) or f"Watch whether {primary_topic} signals turn into repeatable production patterns."
-    return OutputDigestEditorial(
-        editorialFrame=editorial_frame,
-        builderImplication=builder_implication,
-        watchSignal=watch_signal,
-    )
-
-
 def _effective_timestamp_sql(alias: str = "d") -> str:
     return f"""
         CASE
@@ -642,6 +676,8 @@ def _is_low_value_candidate(candidate: CandidateDocument) -> bool:
     if candidate.canonical_url.rstrip("/").endswith(("/blog", "/models", "/research", "/science", "/engineering", "/events")):
         return True
     if any(domain in candidate.source_domain for domain in ("landing.llamaindex.ai",)):
+        return True
+    if candidate.summary_short.strip() and candidate.summary_short.strip()[-1] not in ".!?\u2019\u201d":
         return True
     if len(candidate.summary_short.split()) < 12 and len(candidate.why_it_matters.split()) < 10:
         return True
@@ -1016,6 +1052,7 @@ def _openai_chat_completion(
     system_prompt: str,
     user_prompt: str,
 ) -> Dict[str, Any]:
+    timeout_seconds = max(float(os.getenv("DAILY_DIGEST_OPENAI_TIMEOUT_S", "180")), 30.0)
     response = httpx.post(
         os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1/chat/completions"),
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
@@ -1028,11 +1065,14 @@ def _openai_chat_completion(
             ],
             "response_format": {"type": "json_object"},
         },
-        timeout=60,
+        timeout=timeout_seconds,
     )
     response.raise_for_status()
     data = response.json()
-    content = data["choices"][0]["message"]["content"]
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise DigestGenerationError("Model response did not contain message content") from exc
     if not isinstance(content, str):
         raise DigestGenerationError("Model response content was not a string")
     try:
@@ -1075,25 +1115,31 @@ def write_editorial_draft(
     }
     system_prompt = (
         "You are the Lambic Labs editor for the Lambic AI Brief. Return strict JSON only. "
-        "Write a builder-facing AI engineering digest for the website with enough detail that readers can understand the development without leaving the page. "
+        "Write a concise, builder-facing AI engineering brief in UK English. This is reported editorial copy, not thought leadership or a content-marketing essay. "
         "Do not invent facts, links, metrics, or source names. "
-        "Top-level fields: title, intro, summary, issue_summary, top_things, items[]. "
+        "Top-level fields: title, intro, summary, issue_summary, top_things, editorial, items[]. "
+        "Editorial must contain editorial_frame, builder_implication, and watch_signal. "
         "Each item must contain document_id, headline, contextual_background, what_happened, why_it_matters, engineering_takeaway. "
         "Use the supplied document_id values exactly once each. "
-        "Keep the tone practical, technical, restrained, and useful. "
-        "Write clean standard English. Avoid hype, archive language, strained metaphors, vague filler, and awkward phrasing. "
+        "Use concrete nouns and verbs. Name the company, product, benchmark, measurement, or mechanism before drawing an implication. "
+        "Remove any sentence that sounds written to impress. Prefer a slightly plain exact sentence to a polished generic one. "
+        "Do not use consultant language such as 'decision surface', 'the signal is in', 'operationalize', 'first-class', or 'increasingly the primary'. "
+        "Avoid generic editorial nouns such as signal, shift, pressure, landscape, trend, constraint, governance, and trust unless the sentence immediately names the mechanism. "
+        "Avoid neat rhetorical contrasts, 'not just X but Y', broad scene-setting, summary slogans, and claims that several unrelated stories have converged on one lesson. "
+        "Never begin intro, summary, issue_summary, or editorial_frame with 'This issue'. "
         "Do not echo extraction debris, navigation text, code fragments, timestamps, or partial sentences. "
-        "Prefer concrete engineering implications, implementation details, and verification concerns over generic commentary. "
         "Use the supplied support_snippets, metrics, and quotes to add grounded specificity when they are clean and relevant. "
         "Do not put URLs or markdown links in the prose; source links are rendered separately from source_url metadata. "
         "When an item is about a named product, framework, benchmark, or company-specific system, contextual_background must give one or two grounded orientation sentences explaining what it is or what it does. "
         "If no extra orientation is needed, use an empty string for contextual_background. "
-        "For each item, make what_happened and why_it_matters one or two substantial sentences each. "
-        "Avoid repetitive sentence stems across items such as starting every sentence with 'Builders', 'The paper', or 'This issue'. "
-        "Avoid ellipses, boilerplate transitions, and generic framing that could fit any AI article. "
-        "Do not use placeholder or generic issue titles like 'AI Brief - DATE' or 'Lambic AI Brief - DATE'; write a specific issue headline. "
-        "Make issue_summary one sharp sentence, summary three or four complete sentences, and engineering_takeaway a distinct practical implication rather than a paraphrase of why_it_matters. "
-        "Every top_things entry must be a complete sentence. "
+        "For each item: what_happened reports the supported fact; why_it_matters explains the causal or operational consequence; engineering_takeaway names a specific action, test, or decision only where the evidence warrants it. "
+        "Do not make every engineering_takeaway an imperative. No more than half may start with a command verb such as Add, Build, Design, Implement, Keep, Make, Pin, Require, Treat, Use, or Version. Count the openings before returning JSON. "
+        "Avoid repetitive sentence stems across items, boilerplate transitions, and generic framing that could fit an unrelated article. "
+        "The title should name the strongest specific development in 5 to 18 words. Do not make it a list joined by 'plus' or 'while'. "
+        "The intro should use one or two named facts to establish why the edition is worth reading. The summary should connect only stories that genuinely share a mechanism. "
+        "Make issue_summary one plain, specific sentence. Every top_things entry must be a complete sentence and must not duplicate another field. "
+        "For editorial: editorial_frame states Lambic's specific judgement about the reported evidence, not how to read the issue; builder_implication identifies one concrete change to a design or operating decision; watch_signal names observable future evidence that could confirm or weaken the judgement. "
+        "The watch_signal must name a company, product, benchmark, measurement, release, incident, or policy described in the source material. Never write 'watch whether signals turn into patterns'. "
         "Strip newsletter numbering, site boilerplate, and article scaffolding from the prose."
     )
     user_prompt = json.dumps(payload, ensure_ascii=True)
@@ -1113,6 +1159,77 @@ def write_editorial_draft(
     if returned_ids != expected_ids:
         raise DigestGenerationError("Model draft did not return the expected document set")
     return draft
+
+
+def _review_evidence_payload(candidates: Sequence[CandidateDocument]) -> list[dict[str, Any]]:
+    return [
+        {
+            "document_id": candidate.document_id,
+            "source_name": candidate.source_name,
+            "source_title": candidate.title,
+            "summary_short": candidate.summary_short,
+            "why_it_matters": candidate.why_it_matters,
+            "metrics": candidate.metrics[:2],
+            "support_snippets": candidate.support_snippets[:3],
+        }
+        for candidate in candidates
+    ]
+
+
+def review_and_rewrite_editorial_draft(
+    *,
+    settings: DigestGeneratorSettings,
+    draft: DraftDigestContent,
+    candidates: Sequence[CandidateDocument],
+    findings: Sequence[EditorialFinding],
+    recent_payloads: Sequence[Dict[str, Any]],
+) -> ReviewedDraftEnvelope:
+    recent_examples = [
+        {
+            "date": payload.get("date"),
+            "title": payload.get("title"),
+            "intro": payload.get("intro"),
+            "issueSummary": payload.get("issueSummary"),
+            "editorial": payload.get("editorial"),
+        }
+        for payload in recent_payloads[:5]
+    ]
+    payload = {
+        "draft": draft.model_dump(mode="json"),
+        "source_evidence": _review_evidence_payload(candidates),
+        "deterministic_findings": [finding.as_dict() for finding in findings],
+        "recent_issues_for_repetition_check": recent_examples,
+    }
+    system_prompt = (
+        "You are the second, independent editor for the Lambic AI Brief. Return strict JSON only with keys review and digest. "
+        "Review has arrays structural_findings, anti_ai_findings, and material_edits. Digest must preserve the exact draft schema and every document_id exactly once. "
+        "Apply the Lambic writing workflow: structural review first, anti-AI review second, final polish last. "
+        "Structural review: each field must do distinct work; what_happened reports; why_it_matters explains a mechanism or consequence; engineering_takeaway gives a specific response and must not merely restate why_it_matters. Delete duplication. "
+        "Anti-AI review: cut performative phrasing, vague abstraction, generic transitions, empty polish, rhetorical symmetry, consultancy language, and sentences that could appear unchanged in an unrelated LinkedIn post. "
+        "Replace abstraction with a named variable, mechanism, consequence, example, test, threshold, or trade-off. Remove any sentence written to sound impressive. "
+        "Use UK English and restrained operational prose. Keep natural variation in sentence length and openings. No more than half of engineering_takeaway values may begin with a command verb such as Add, Build, Design, Implement, Keep, Make, Pin, Require, Treat, Use, or Version. Count them exactly; recast the remainder around a concrete subject, condition, or decision. "
+        "Hard length limits: title 5-18 words; intro no more than 60; issue_summary no more than 38; each editorial field no more than 55; what_happened no more than 85; why_it_matters no more than 65; engineering_takeaway no more than 48. Count and compress before returning JSON. "
+        "Do not use 'decision surface', 'the signal is in', 'signals turn into patterns', 'operationalize', 'first-class', 'This issue covers', 'a practical look at', or 'not just X but Y'. "
+        "The title must name the strongest development rather than list themes. The editorial_frame must contain a defensible judgement about named evidence. The watch_signal must name observable evidence from a company, product, benchmark, release, incident, measurement, or policy. "
+        "Resolve every deterministic finding. Compare with recent issues and change repeated openings or boilerplate. "
+        "Preserve supported facts and attribution. Do not add facts that are absent from source_evidence. Do not change source scope or omit an item."
+    )
+    try:
+        raw = _openai_chat_completion(
+            model=settings.model,
+            api_key=settings.openai_api_key,
+            system_prompt=system_prompt,
+            user_prompt=json.dumps(payload, ensure_ascii=True),
+        )
+        reviewed = ReviewedDraftEnvelope.model_validate(raw)
+    except (httpx.HTTPError, ValidationError, DigestGenerationError) as exc:
+        raise DigestGenerationError(f"Editorial review failed: {exc}") from exc
+
+    expected_ids = {candidate.document_id for candidate in candidates}
+    returned_ids = {item.document_id for item in reviewed.digest.items}
+    if returned_ids != expected_ids or len(reviewed.digest.items) != len(candidates):
+        raise DigestGenerationError("Editorial review did not preserve the expected document set")
+    return reviewed
 
 
 def build_output_digest(
@@ -1237,17 +1354,37 @@ def build_output_digest(
             href="/brief",
             kind="archive",
         ),
-        editorial=_build_digest_editorial(
-            topics=topics,
-            top_things=cleaned_top_things,
-            summary=_clean_sentence(draft.summary, minimum_words=12, maximum_length=360) or fallback_summary,
-            issue_summary=share_description,
+        editorial=OutputDigestEditorial(
+            editorialFrame=_clean_sentence(
+                draft.editorial.editorial_frame,
+                minimum_words=8,
+                maximum_length=360,
+            )
+            or share_description,
+            builderImplication=_clean_sentence(
+                draft.editorial.builder_implication,
+                minimum_words=8,
+                maximum_length=360,
+            )
+            or fallback_issue_summary,
+            watchSignal=_clean_sentence(
+                draft.editorial.watch_signal,
+                minimum_words=8,
+                maximum_length=360,
+            )
+            or fallback_issue_summary,
         ),
         items=items,
     )
 
 
-def quality_gate_digest(digest: OutputDigest, *, min_items: int, min_source_count: int = 3) -> Optional[str]:
+def quality_gate_digest(
+    digest: OutputDigest,
+    *,
+    min_items: int,
+    min_source_count: int = 3,
+    recent_payloads: Sequence[Dict[str, Any]] = (),
+) -> Optional[str]:
     if len(digest.items) < min_items:
         return f"only {len(digest.items)} items selected"
     source_names = {item.sourceName for item in digest.items}
@@ -1270,6 +1407,14 @@ def quality_gate_digest(digest: OutputDigest, *, min_items: int, min_source_coun
             return f"incomplete item copy for {item.documentId}"
         if item.category not in EDITORIAL_CATEGORIES:
             return f"invalid category for {item.documentId}"
+    editorial_review = review_digest_payload(
+        digest.model_dump(mode="json", exclude_none=True),
+        recent_payloads=recent_payloads,
+    )
+    if not editorial_review.passed:
+        return f"editorial style review failed: {editorial_review.summary()}"
+    if digest.editorialReview is None or digest.editorialReview.status != "passed":
+        return "editorial review record was missing"
     return None
 
 
@@ -1358,23 +1503,88 @@ def generate_digest_for_day(
         window_end=window_end,
         candidates=selected,
     )
-    digest = build_output_digest(
-        settings=settings,
-        target_date=target_date,
-        backfill=request.mode != "daily",
-        window_start=window_start,
-        window_end=window_end,
-        draft=draft,
-        candidates=selected,
+    recent_payloads = load_recent_digest_payloads(
+        settings.digest_dir,
+        before_date=target_date.isoformat(),
+        limit=10,
     )
+    revision_count = 0
+    review_notes = DraftReviewNotes()
+    digest: Optional[OutputDigest] = None
+    final_style_review = None
+    review_error: Optional[str] = None
+    for _attempt in range(3):
+        preliminary_digest = build_output_digest(
+            settings=settings,
+            target_date=target_date,
+            backfill=request.mode != "daily",
+            window_start=window_start,
+            window_end=window_end,
+            draft=draft,
+            candidates=selected,
+        )
+        preliminary_review = review_digest_payload(
+            preliminary_digest.model_dump(mode="json", exclude_none=True),
+            recent_payloads=recent_payloads,
+        )
+        try:
+            reviewed = review_and_rewrite_editorial_draft(
+                settings=settings,
+                draft=draft,
+                candidates=selected,
+                findings=preliminary_review.findings,
+                recent_payloads=recent_payloads,
+            )
+        except DigestGenerationError as exc:
+            review_error = str(exc)
+            continue
+        draft = reviewed.digest
+        review_notes = reviewed.review
+        revision_count += 1
+        digest = build_output_digest(
+            settings=settings,
+            target_date=target_date,
+            backfill=request.mode != "daily",
+            window_start=window_start,
+            window_end=window_end,
+            draft=draft,
+            candidates=selected,
+        )
+        final_style_review = review_digest_payload(
+            digest.model_dump(mode="json", exclude_none=True),
+            recent_payloads=recent_payloads,
+        )
+        if final_style_review.passed:
+            break
+
+    if digest is None or final_style_review is None:
+        detail = f": {review_error}" if review_error else ""
+        raise DigestGenerationError(f"Editorial review did not produce a digest{detail}")
+    if final_style_review.passed:
+        digest.editorialReview = OutputDigestEditorialReview(
+            workflowVersion=EDITORIAL_WORKFLOW_VERSION,
+            status="passed",
+            revisionCount=revision_count,
+            checkedFields=final_style_review.checked_fields,
+            reviewedAt=datetime.now(timezone.utc).isoformat(),
+            structuralFindings=review_notes.structural_findings,
+            antiAiFindings=review_notes.anti_ai_findings,
+            materialEdits=review_notes.material_edits,
+        )
     min_source_count = settings.min_source_count if request.mode == "daily" else settings.backfill_min_source_count
-    gate_error = quality_gate_digest(digest, min_items=settings.min_items, min_source_count=min_source_count)
+    gate_error = quality_gate_digest(
+        digest,
+        min_items=settings.min_items,
+        min_source_count=min_source_count,
+        recent_payloads=recent_payloads,
+    )
     if gate_error:
         return DayRunResult(date=target_date, status="skipped-weak", reason=gate_error)
     if request.dry_run:
         return DayRunResult(date=target_date, status="dry-run", reason="validated without writing")
     filepath = write_digest_file(settings.digest_dir, digest)
     return DayRunResult(date=target_date, status="generated", filepath=filepath)
+
 
 def execute_generation(
     *,
