@@ -1211,7 +1211,8 @@ def review_and_rewrite_editorial_draft(
         "Hard length limits: title 5-18 words; intro no more than 60; issue_summary no more than 38; each editorial field no more than 55; what_happened no more than 85; why_it_matters no more than 65; engineering_takeaway no more than 48. Count and compress before returning JSON. "
         "Do not use 'decision surface', 'the signal is in', 'signals turn into patterns', 'operationalize', 'first-class', 'This issue covers', 'a practical look at', or 'not just X but Y'. "
         "The title must name the strongest development rather than list themes. The editorial_frame must contain a defensible judgement about named evidence. The watch_signal must name observable evidence from a company, product, benchmark, release, incident, measurement, or policy. "
-        "Resolve every deterministic finding. Compare with recent issues and change repeated openings or boilerplate. "
+        "Resolve every deterministic finding and visibly change each field named by a finding. For duplicate-copy findings, rewrite the named field from source evidence; never copy issue_summary into editorial_frame or copy a top_things entry into builder_implication. "
+        "Before returning, normalise the non-headline fields to lower-case words and verify that no two complete values are identical. Compare with recent issues and change repeated openings or boilerplate. "
         "Preserve supported facts and attribution. Do not add facts that are absent from source_evidence. Do not change source scope or omit an item."
     )
     try:
