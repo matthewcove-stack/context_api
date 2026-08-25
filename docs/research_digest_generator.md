@@ -42,6 +42,8 @@ Recommended defaults are defined in `.env.example`.
 ## Publish behavior
 
 - The publish command writes one JSON file per day into `apps/web/content/research-digests/` in the website repo.
+- Drafting is followed by an independent structural and anti-AI rewrite, then a deterministic house-style gate that compares the issue with the previous ten. A failed issue is skipped rather than published.
+- Passing issues include an `editorialReview` record with the workflow version and review evidence.
 - It then refreshes:
   - `apps/web/content/research-digest-assets/`
   - `apps/web/content/research-weekly/`
@@ -53,6 +55,8 @@ Recommended defaults are defined in `.env.example`.
 - For daily mode it checks database reachability and candidate sufficiency before mutating the website repo.
 - `--dry-run` executes the full generation and validation flow inside a temporary workspace copy, leaving the real repo untouched.
 - A structured JSON report can be written for each run for scheduler or operator inspection.
+
+The editorial rules and repair path are documented in `docs/lambic_ai_brief_editorial_workflow.md`.
 
 ## Backfill notes
 

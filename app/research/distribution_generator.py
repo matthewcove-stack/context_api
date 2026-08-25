@@ -211,6 +211,17 @@ def build_distribution_asset(digest: OutputDigest) -> DistributionAssetBundle:
 def write_distribution_asset(settings: DistributionGeneratorSettings, asset: DistributionAssetBundle) -> Path:
     ensure_dir(settings.assets_dir)
     filepath = settings.assets_dir / f"{asset.date}.json"
+    if filepath.exists():
+        try:
+            existing = json.loads(filepath.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = None
+        candidate = asset.model_dump(mode="json", exclude_none=True)
+        if isinstance(existing, dict):
+            existing_comparable = {key: value for key, value in existing.items() if key != "generatedAt"}
+            candidate_comparable = {key: value for key, value in candidate.items() if key != "generatedAt"}
+            if existing_comparable == candidate_comparable:
+                return filepath
     filepath.write_text(render_json(asset), encoding="utf-8")
     return filepath
 
@@ -248,6 +259,10 @@ def build_weekly_digest(week_id: str, digests: Sequence[OutputDigest]) -> Weekly
                 takeaways.append(normalized)
     top_themes = [topic for topic, _ in sorted(topic_counts.items(), key=lambda item: (-item[1], item[0]))[:4]]
     summary_parts = [_trim_text(digest.issueSummary, 140) for digest in ordered[:3]]
+    reviewed_editorial = next(
+        (digest.editorial for digest in ordered if digest.editorialReview is not None and digest.editorial is not None),
+        None,
+    )
     if top_themes:
         title = f"This week in AI engineering: {', '.join(top_themes[:3])}"
     else:
@@ -255,8 +270,18 @@ def build_weekly_digest(week_id: str, digests: Sequence[OutputDigest]) -> Weekly
     intro = _trim_text(
         " ".join(
             [
-                f"This weekly Lambic AI Brief rounds up the clearest practical signals from {len(ordered)} daily issues.",
-                f"The main themes were {', '.join(top_themes[:3])}." if top_themes else "",
+                (
+                    f"This edition collects {len(ordered)} daily reports."
+                    if reviewed_editorial
+                    else f"This weekly Lambic AI Brief rounds up the clearest practical signals from {len(ordered)} daily issues."
+                ),
+                (
+                    f"They covered {', '.join(top_themes[:3])}."
+                    if reviewed_editorial and top_themes
+                    else f"The main themes were {', '.join(top_themes[:3])}."
+                    if top_themes
+                    else ""
+                ),
             ]
         ).strip(),
         320,
@@ -302,7 +327,11 @@ def build_weekly_digest(week_id: str, digests: Sequence[OutputDigest]) -> Weekly
         ),
         editorial=OutputDigestEditorial(
             editorialFrame=_trim_text(
-                f"This weekly layer is where the brief stops being a log of daily issues and becomes a directional read on {', '.join(top_themes[:3]) or 'the current AI engineering stack'}.",
+                (
+                    reviewed_editorial.editorialFrame
+                    if reviewed_editorial
+                    else f"This weekly layer is where the brief stops being a log of daily issues and becomes a directional read on {', '.join(top_themes[:3]) or 'the current AI engineering stack'}."
+                ),
                 240,
             ),
             builderImplication=_trim_text(
@@ -334,6 +363,17 @@ def build_weekly_digests(digests: Sequence[OutputDigest]) -> List[WeeklyDigest]:
 def write_weekly_digest(settings: DistributionGeneratorSettings, digest: WeeklyDigest) -> Path:
     ensure_dir(settings.weekly_dir)
     filepath = settings.weekly_dir / f"{digest.weekId}.json"
+    if filepath.exists():
+        try:
+            existing = json.loads(filepath.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = None
+        candidate = digest.model_dump(mode="json", exclude_none=True)
+        if isinstance(existing, dict):
+            existing_comparable = {key: value for key, value in existing.items() if key != "generatedAt"}
+            candidate_comparable = {key: value for key, value in candidate.items() if key != "generatedAt"}
+            if existing_comparable == candidate_comparable:
+                return filepath
     filepath.write_text(render_json(digest), encoding="utf-8")
     return filepath
 

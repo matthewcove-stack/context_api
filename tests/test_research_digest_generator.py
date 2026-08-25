@@ -4,7 +4,9 @@ from datetime import date, datetime, timedelta, timezone
 from app.research.digest_generator import (
     CandidateDocument,
     DraftDigestContent,
+    DraftDigestEditorial,
     DraftDigestItem,
+    DraftReviewNotes,
     GeneratorRequest,
     OutputDigest,
     _fallback_engineering_takeaway,
@@ -17,6 +19,18 @@ from app.research.digest_generator import (
     quality_gate_digest,
     select_distinct_candidates,
 )
+
+
+def test_review_notes_accept_structured_editor_findings() -> None:
+    notes = DraftReviewNotes(
+        structural_findings=[{"location": "draft.title", "issue": "The title lists unrelated themes."}],
+        anti_ai_findings=[{"location": "draft.intro", "finding": "The opening is generic."}],
+        material_edits=[{"location": "draft.summary", "change": "Named the measured result."}],
+    )
+
+    assert notes.structural_findings == ["draft.title: The title lists unrelated themes."]
+    assert notes.anti_ai_findings == ["draft.intro: The opening is generic."]
+    assert notes.material_edits == ["draft.summary: Named the measured result."]
 
 
 def _candidate(
@@ -175,6 +189,11 @@ def test_build_output_digest_preserves_grounded_metadata() -> None:
             "Production-facing agent orchestration patterns are becoming more reusable.",
             "Teams can now copy concrete workflow designs instead of inventing them from scratch.",
         ],
+        editorial=DraftDigestEditorial(
+            editorial_frame="Reusable agent orchestration now depends on explicit state boundaries and replayable execution.",
+            builder_implication="State and side effects need separate interfaces so failures can be reproduced without rerunning external actions.",
+            watch_signal="Flue releases should show whether hook-level traces remain legible once agents use several tools per turn.",
+        ),
         items=[
             DraftDigestItem(
                 document_id="doc-1",
@@ -212,7 +231,7 @@ def test_build_output_digest_preserves_grounded_metadata() -> None:
     assert digest.secondaryCta is not None
     assert digest.secondaryCta.href == "/brief"
     assert digest.editorial is not None
-    assert "implementation" in digest.editorial.editorialFrame.lower() or "decision surface" in digest.editorial.editorialFrame.lower()
+    assert digest.editorial.editorialFrame.startswith("Reusable agent orchestration")
 
 
 def test_build_output_digest_replaces_blocked_public_copy_fallbacks() -> None:
@@ -230,6 +249,11 @@ def test_build_output_digest_replaces_blocked_public_copy_fallbacks() -> None:
         summary="This issue covers agents and evals for teams building production AI systems.",
         issue_summary="This issue covers agents and evals for teams building production AI systems.",
         top_things=["Read the issue items for the engineering implications and source links."],
+        editorial=DraftDigestEditorial(
+            editorial_frame="Release-focused evaluation makes agent changes easier to compare against stable traces.",
+            builder_implication="Teams need to version the harness with the runtime and test both together before release.",
+            watch_signal="The next Agent Evaluation Harnesses release should report trace coverage across multi-tool failures.",
+        ),
         items=[
             DraftDigestItem(
                 document_id="doc-1",
@@ -309,6 +333,19 @@ def test_low_value_candidate_filter_rejects_pagination_and_landing_pages() -> No
 
     assert _is_low_value_candidate(page_candidate) is True
     assert _is_low_value_candidate(landing_candidate) is True
+
+
+def test_low_value_candidate_filter_rejects_truncated_source_summary() -> None:
+    candidate = _candidate(
+        document_id="doc-truncated",
+        source_name="Newsletter",
+        title="Post-training scaling discussion",
+        url="https://example.com/truncated",
+        score=1.0,
+    )
+    candidate.summary_short = "The source excerpt stops before it completes the reported claim"
+
+    assert _is_low_value_candidate(candidate) is True
 
 
 def test_candidate_builder_should_prefer_effective_timestamp_when_raw_published_at_is_stale() -> None:

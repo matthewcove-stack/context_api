@@ -27,6 +27,7 @@ Recommended runtime:
 
 - `BRIEF_PUBLISH_ENV=prod`
 - `DAILY_DIGEST_TOPIC_KEY=ai_research`
+- `DAILY_DIGEST_OPENAI_TIMEOUT_S=180`
 - `BRIEF_PUBLISH_REPORT_DIR=/path/to/report-output`
 
 ## Canonical publish command
@@ -59,14 +60,16 @@ Optional structured report output:
 2. Verifies publish runtime configuration and database reachability.
 3. For daily mode, checks that enough strong candidate documents exist before mutation.
 4. For live publish, verifies the website repo worktree is clean.
-5. Generates daily Brief issue artifacts into `apps/web/content/research-digests/`.
-6. Regenerates derivative assets into `apps/web/content/research-digest-assets/`.
-7. Regenerates weekly artifacts into `apps/web/content/research-weekly/`.
-8. Validates website research artifacts.
-9. Regenerates RSS feeds.
-10. Runs the website build.
-11. Commits all generated website outputs in one commit.
-12. Pushes once to the configured website branch.
+5. Generates a reported draft, runs structural and anti-AI review, and checks it against recent issues.
+6. Fails closed if the revised issue still contains blocked house-style patterns, duplication, unfinished prose, or an unspecific editorial watch item.
+7. Writes passing daily Brief artifacts and their `editorialReview` record into `apps/web/content/research-digests/`.
+8. Regenerates derivative assets into `apps/web/content/research-digest-assets/`.
+9. Regenerates weekly artifacts into `apps/web/content/research-weekly/`.
+10. Validates website research artifacts.
+11. Regenerates RSS feeds.
+12. Runs the website build.
+13. Commits all generated website outputs in one commit.
+14. Pushes once to the configured website branch.
 
 Dry-run performs the same generation and validation steps inside a temporary copy of the website repo, so the real worktree stays unchanged.
 Each run can also emit a structured JSON report with preflight, per-date outcomes, generated files, and postflight checks.
