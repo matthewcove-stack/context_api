@@ -110,3 +110,26 @@ def test_review_rejects_an_opening_reused_across_recent_issues() -> None:
     review = review_digest_payload(payload, recent_payloads=recent)
 
     assert any(finding.code == "recent-opening-repeat" and finding.location == "title" for finding in review.findings)
+
+
+def test_review_rejects_lowercase_sentence_starts() -> None:
+    payload = {
+        "title": "langchain makes agent evaluations reproducible",
+        "intro": (
+            "LangChain published a reviewable world specification for agent evaluations. "
+            "openwiki linked each claim to versioned evidence after a code change."
+        ),
+    }
+
+    review = review_digest_payload(payload)
+    lowercase_locations = {
+        finding.location for finding in review.findings if finding.code == "lowercase-sentence-start"
+    }
+
+    assert lowercase_locations == {"title", "intro"}
+
+
+def test_review_allows_an_official_lowercase_tool_name_at_sentence_start() -> None:
+    review = review_digest_payload({"title": "pytest catches regressions in agent harnesses"})
+
+    assert not any(finding.code == "lowercase-sentence-start" for finding in review.findings)

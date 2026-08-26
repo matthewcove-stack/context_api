@@ -1122,6 +1122,7 @@ def write_editorial_draft(
         "Each item must contain document_id, headline, contextual_background, what_happened, why_it_matters, engineering_takeaway. "
         "Use the supplied document_id values exactly once each. "
         "Use concrete nouns and verbs. Name the company, product, benchmark, measurement, or mechanism before drawing an implication. "
+        "Use normal sentence case and preserve the official capitalisation of companies, products, acronyms, and programming languages. "
         "Remove any sentence that sounds written to impress. Prefer a slightly plain exact sentence to a polished generic one. "
         "Do not use consultant language such as 'decision surface', 'the signal is in', 'operationalize', 'first-class', or 'increasingly the primary'. "
         "Avoid generic editorial nouns such as signal, shift, pressure, landscape, trend, constraint, governance, and trust unless the sentence immediately names the mechanism. "
@@ -1212,7 +1213,7 @@ def review_and_rewrite_editorial_draft(
         "Do not use 'decision surface', 'the signal is in', 'signals turn into patterns', 'operationalize', 'first-class', 'This issue covers', 'a practical look at', or 'not just X but Y'. "
         "The title must name the strongest development rather than list themes. The editorial_frame must contain a defensible judgement about named evidence. The watch_signal must name observable evidence from a company, product, benchmark, release, incident, measurement, or policy. "
         "Resolve every deterministic finding and visibly change each field named by a finding. For duplicate-copy findings, rewrite the named field from source evidence; never copy issue_summary into editorial_frame or copy a top_things entry into builder_implication. "
-        "Before returning, normalise the non-headline fields to lower-case words and verify that no two complete values are identical. Compare with recent issues and change repeated openings or boilerplate. "
+        "Before returning, compare complete non-headline values case-insensitively after stripping punctuation and verify that no two are identical. Do not alter the copy's capitalisation to perform this check. Use normal sentence case and preserve official capitalisation for companies, products, acronyms, and programming languages. Compare with recent issues and change repeated openings or boilerplate. "
         "Preserve supported facts and attribution. Do not add facts that are absent from source_evidence. Do not change source scope or omit an item."
     )
     try:
