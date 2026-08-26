@@ -103,6 +103,20 @@ TOP_LEVEL_LOCATIONS = {
     "editorial.watchSignal",
 }
 
+LOWERCASE_LEADING_TOKENS = {
+    "ffmpeg",
+    "kubectl",
+    "llm",
+    "llm-anthropic",
+    "markdown-svg-renderer",
+    "npm",
+    "pip",
+    "pytest",
+    "sqlite",
+    "systemd",
+    "uv",
+}
+
 
 @dataclass(frozen=True)
 class EditorialFinding:
@@ -287,6 +301,29 @@ def _add_sentence_findings(fields: Sequence[tuple[str, str]], findings: list[Edi
             )
 
 
+def _add_capitalisation_findings(fields: Sequence[tuple[str, str]], findings: list[EditorialFinding]) -> None:
+    for location, value in fields:
+        for sentence in re.split(r"(?<=[.!?])\s+", value):
+            stripped = sentence.lstrip(" \t\n\r\"'\u2018\u2019\u201c\u201d([{")
+            if not stripped or stripped[0].isdigit():
+                continue
+            match = re.search(r"[A-Za-z][A-Za-z0-9.+_-]*", stripped)
+            if match is None:
+                continue
+            token = match.group(0)
+            if token in LOWERCASE_LEADING_TOKENS:
+                continue
+            if token[0].isupper() or any(character.isupper() for character in token[1:]):
+                continue
+            findings.append(
+                EditorialFinding(
+                    code="lowercase-sentence-start",
+                    location=location,
+                    message=f"starts a sentence with lowercase '{token}'; use normal sentence case",
+                )
+            )
+
+
 def _add_pattern_findings(fields: Sequence[tuple[str, str]], findings: list[EditorialFinding]) -> None:
     for location, value in fields:
         for code, pattern in PROHIBITED_PATTERNS:
@@ -408,6 +445,7 @@ def review_digest_payload(
     _add_duplicate_findings(fields, findings)
     _add_length_findings(fields, findings)
     _add_sentence_findings(fields, findings)
+    _add_capitalisation_findings(fields, findings)
     _add_pattern_findings(fields, findings)
     _add_template_findings(payload, findings)
     _add_watch_specificity_finding(payload, findings)
