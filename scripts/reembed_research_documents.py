@@ -4,12 +4,12 @@ import argparse
 import json
 import os
 
-from app.research.embeddings import resolve_embedding_runtime
+from app.research.embeddings import EmbeddingProviderError, resolve_embedding_runtime
 from app.research.worker import _embed_existing_document
 from app.storage.db import create_db_engine, list_research_documents_for_reembed
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description="Re-embed stored research documents with the active embedding model.")
     parser.add_argument("--topic-key", required=True)
     parser.add_argument("--limit", type=int, default=1000)
@@ -48,6 +48,14 @@ def main() -> None:
                 chunk_max_chars=int(os.getenv("RESEARCH_CHUNK_MAX_CHARS", "1200")),
             )
             processed += 1
+        except EmbeddingProviderError as exc:
+            print(json.dumps({
+                "status": "blocked-provider", "provider_code": exc.code,
+                "http_status": exc.status, "action": exc.action,
+                "selected": len(rows), "processed": processed, "failed": failed + 1,
+                "remaining": len(rows) - processed - failed - 1,
+            }))
+            return exc.exit_status
         except Exception as exc:
             failed += 1
             print(json.dumps({"document_id": str(row["document_id"]), "status": "failed", "error": str(exc)}))
@@ -61,7 +69,8 @@ def main() -> None:
             "failed": failed,
         })
     )
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

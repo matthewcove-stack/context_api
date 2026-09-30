@@ -1,14 +1,26 @@
 # context_api
 
-## What works today
+## Active purpose
+
+Collect selected research sources, retrieve cited evidence for Lambic projects,
+and produce a selective Lambic AI Brief. The older voice/Notion project and task
+interfaces remain supported in maintenance scope; they are not the growth roadmap.
+
+Production check, 30 September 2026: collection and API health are working, but
+OpenAI reports `credit_balance_exhausted`. Fresh embeddings and Brief generation
+are blocked until account credit is restored. A new key alone does not fix this.
+See `docs/current_state.md` and `docs/lambic_ai_brief_operations.md`.
+
+## Implemented capabilities
 - FastAPI + Postgres + Alembic
 - Authenticated v1 endpoints for searching mirrored Projects/Tasks
 - Intel fixture ingestion + /v2 Context Pack retrieval with progressive disclosure endpoints
 - URL ingestion + worker-based fetch/extract/enrich pipeline for intel articles
 - Docker quickstart and tests exist
 
-## MVP priority (now)
-URL ingestion with fetch/extract and LLM enrichment feeds the existing intel-only /v2 Context Pack.
+## Priority now
+Restore reliable embeddings and reviewed publishing, then test cited retrieval on
+real project decisions. Source coverage and article volume are not proof of usefulness.
 
 This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 
@@ -95,7 +107,7 @@ This MUST NOT break or alter existing /v1 projects/tasks behaviour.
 - Canonical publish command: `python scripts/publish_lambic_ai_brief.py --mode daily`
 - Backfill missing days: `python scripts/publish_lambic_ai_brief.py --mode backfill-missing --start-date YYYY-MM-DD --end-date YYYY-MM-DD`
 - Lambic Local 1 host runner: `./scripts/run_lambic_brief_publish.sh --mode daily`
-- Daily host scheduler wrapper: `./scripts/run_lambic_brief_publish_daily.sh` (includes strict pass + backfill fallback for still-missing days)
+- Scheduled wrapper: `./scripts/run_lambic_brief_publish_daily.sh` (daily-mode selection across the unpublished period; weak issues withheld, no reduced-threshold fallback)
 - Distribution-only refresh: `python scripts/generate_research_distribution_assets.py --mode all`
 - Runbooks:
   - `docs/research_digest_generator.md`

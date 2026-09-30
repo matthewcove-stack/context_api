@@ -201,6 +201,7 @@ def parse_request(argv: Optional[Sequence[str]] = None) -> GeneratorRequest:
     parser.add_argument("--end-date")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--allow-skipped-weak", action="store_true", help="Withhold weak issues without treating the editorial decision as an operational failure.")
     args = parser.parse_args(argv)
     from app.research.digest_generator import parse_date
 
@@ -211,6 +212,7 @@ def parse_request(argv: Optional[Sequence[str]] = None) -> GeneratorRequest:
         end_date=parse_date(args.end_date) if args.end_date else None,
         force=bool(args.force),
         dry_run=bool(args.dry_run),
+        allow_skipped_weak=bool(args.allow_skipped_weak),
     )
 
 
@@ -282,6 +284,7 @@ def execute_publish(
         preflight["worktree_clean"] = True
     if (
         not request.dry_run
+        and not request.allow_skipped_weak
         and candidate_readiness.get("evaluated")
         and candidate_readiness.get("enough_candidates") is False
     ):
@@ -312,7 +315,7 @@ def execute_publish(
             settings=workspace_digest_settings,
             request=workspace_request,
             engine=engine,
-            allow_skipped_weak=request.dry_run,
+            allow_skipped_weak=request.dry_run or request.allow_skipped_weak,
         )
         generated_dates = _extract_generated_dates(digest_report)
 
