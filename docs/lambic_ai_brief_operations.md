@@ -111,8 +111,28 @@ The host runner script:
 - reconciles the curated source list, disables replaced and private-address sources, and repairs up to 250 recent missing OpenAI embeddings before generation
 - serializes publish attempts with `flock`, so GitHub Actions and the host fallback cannot mutate the website checkout concurrently
 - writes structured success or blocked-preflight reports under `/srv/lambic/logs/brainos-reports` by default
-- runs `backfill-missing` over a rolling 8-day UTC window so delayed ingestion can still produce missing issues
-- retries any still-missing dates even when the strict pass exits non-zero, using backfill-safe minimum thresholds (`DAILY_DIGEST_BACKFILL_MIN_ITEMS`, `DAILY_DIGEST_BACKFILL_MIN_SOURCE_COUNT`) and optional fallback lookback (`DAILY_DIGEST_BACKFILL_FALLBACK_LOOKBACK_DAYS`)
+- runs `daily --allow-skipped-weak`, covering the period since the last published issue
+- withholds issues that fail the normal gates, recording the reason without lowering item/source requirements
+- stops after a provider error; it does not retry each date or reinterpret quota exhaustion as a lack of news
+
+### Credit or provider failure
+
+Repair prints a redacted JSON record with `status: blocked-provider`, the provider
+code, completed/remaining counts and an operator action. Exit 78 means account
+credit, limit or permission failure; exit 75 means temporary rate/availability.
+Long-running embedding workers cool down for 15 minutes on an account failure,
+or 60–3600 seconds for transient failures, then allow a new attempt. Raw provider
+prose, keys and request headers are not included in this diagnostic.
+
+On 30 September 2026 the live provider returned `credit_balance_exhausted` and
+the latest public issue was dated 18 September. Restore account credit first;
+rotating an otherwise valid key does not solve exhausted credit. After that,
+run bounded repair batches, inspect the remaining missing-model/chunk backlog,
+and resume normal reviewed publishing. Do not change to hash embeddings in production.
+
+The BrainOS Actions workflow independently checks the public feed after every
+scheduled run and fails if the latest issue is older than seven days. This is a
+diagnostic threshold, not an instruction to fill the archive with weak material.
 
 ## Expected outputs
 

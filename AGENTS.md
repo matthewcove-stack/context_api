@@ -3,13 +3,14 @@
 Codex guidance for this repo.
 
 ## What this repo is
-FastAPI service that mirrors Projects and Tasks into Postgres and serves compact search results.
-
-MVP priority: Intel Digest connector and compact Context Packs for LLM reasoning using stored Intel artifacts.
-We ship Option B: Intel-only packs under /v2, without touching existing /v1 projects/tasks behaviour.
+Research ingestion, cited context packs and reviewed Lambic Brief publishing.
+Projects/Tasks mirroring is maintained legacy functionality. Preserve v1/v2 contracts.
 
 ## Current phase focus
-Phase 4: ChatGPT Actions integration (read-only OpenAPI + deployment docs).
+Research reliability and measured usefulness, as recorded in `docs/current_state.md`.
+Do not treat historical phase lists as instructions to grow the voice/Notion product.
+Do not lower editorial/source thresholds to fill dates or claim new publication
+until a reviewed issue is visible in the production feed.
 
 ## Quick commands
 - Setup: `cp .env.example .env`

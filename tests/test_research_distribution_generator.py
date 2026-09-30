@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.research.digest_generator import OutputDigest, OutputDigestItem
+from app.research.digest_generator import OutputDigest, OutputDigestItem, OutputDigestEditorial, OutputDigestEditorialReview
 from app.research.distribution_generator import (
     DistributionGeneratorSettings,
     build_distribution_asset,
+    build_weekly_digest,
     build_weekly_digests,
     execute_generation,
     render_json,
@@ -111,7 +112,31 @@ def test_build_weekly_digests_groups_by_iso_week_and_keeps_topics() -> None:
     assert weekly[0].issues[0].date == "2026-03-12"
     assert "agents" in weekly[0].topThemes
     assert weekly[0].share.canonicalPath == "/brief/weekly/2026-W11"
-    assert weekly[0].editorial.editorialFrame
+    assert weekly[0].editorial is None
+    assert weekly[0].editorialSourceDate is None
+    assert weekly[0].issueSummary == "Issue A summary."
+    assert weekly[0].title.startswith("Issue A — week of")
+
+
+def test_weekly_preserves_complete_reviewed_copy_and_its_source() -> None:
+    digest = _digest("2026-03-12", title="Issue A", issue_summary="A complete summary. " * 20,
+                     topics=["agents"], top_things=["A supported observation."])
+    digest.editorial = OutputDigestEditorial(
+        editorialFrame="A complete factual sentence. " * 20,
+        builderImplication="A complete implication. " * 20,
+        watchSignal="An unanswered research question. " * 20,
+    )
+    digest.editorialReview = OutputDigestEditorialReview(
+        workflowVersion="test", status="passed", revisionCount=1, checkedFields=20,
+        reviewedAt="2026-03-12T12:00:00+00:00",
+    )
+    weekly = build_weekly_digest("2026-W11", [digest])
+    assert weekly.editorial == digest.editorial
+    assert weekly.editorialSourceDate == digest.date
+    assert weekly.issueSummary == digest.issueSummary
+    assert "…" not in render_json(weekly)
+    digest.editorialReview = None
+    assert build_weekly_digest("2026-W11", [digest]).editorial is None
 
 
 def test_execute_generation_refreshes_outputs_and_removes_stale_files(tmp_path: Path) -> None:

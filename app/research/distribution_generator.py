@@ -58,7 +58,8 @@ class WeeklyDigest(BaseModel):
     share: OutputDigestShare
     primaryCta: OutputDigestCta
     secondaryCta: OutputDigestCta
-    editorial: OutputDigestEditorial
+    editorial: Optional[OutputDigestEditorial] = None
+    editorialSourceDate: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -258,36 +259,20 @@ def build_weekly_digest(week_id: str, digests: Sequence[OutputDigest]) -> Weekly
             if normalized and normalized not in takeaways:
                 takeaways.append(normalized)
     top_themes = [topic for topic, _ in sorted(topic_counts.items(), key=lambda item: (-item[1], item[0]))[:4]]
-    summary_parts = [_trim_text(digest.issueSummary, 140) for digest in ordered[:3]]
-    reviewed_editorial = next(
-        (digest.editorial for digest in ordered if digest.editorialReview is not None and digest.editorial is not None),
+    editorial_source = next(
+        (digest for digest in ordered if digest.editorialReview is not None
+         and digest.editorialReview.status == "passed" and digest.editorial is not None),
         None,
     )
-    if top_themes:
-        title = f"This week in AI engineering: {', '.join(top_themes[:3])}"
-    else:
-        title = f"Lambic AI Brief Weekly - {week_id}"
-    intro = _trim_text(
-        " ".join(
-            [
-                (
-                    f"This edition collects {len(ordered)} daily reports."
-                    if reviewed_editorial
-                    else f"This weekly Lambic AI Brief rounds up the clearest practical signals from {len(ordered)} daily issues."
-                ),
-                (
-                    f"They covered {', '.join(top_themes[:3])}."
-                    if reviewed_editorial and top_themes
-                    else f"The main themes were {', '.join(top_themes[:3])}."
-                    if top_themes
-                    else ""
-                ),
-            ]
-        ).strip(),
-        320,
+    title = f"{newest.title} — week of {week_start:%d %B}"
+    intro = (
+        f"This collection contains {len(ordered)} {'report' if len(ordered) == 1 else 'reports'} "
+        f"published between {first_date:%d %B} and {parse_date(newest.date):%d %B %Y}. "
+        "The lead summary is from the latest issue; each report is linked below."
     )
-    issue_summary = _trim_text(" ".join(part for part in summary_parts if part), 220)
-    strongest_editorial = next((digest.editorial for digest in ordered if digest.editorial is not None), None)
+    # This is an archive collection, not an independently reviewed weekly thesis.
+    # Preserve complete source prose and make reuse visible to the reader.
+    issue_summary = newest.issueSummary
     canonical_path = f"/brief/weekly/{week_id}"
     return WeeklyDigest(
         weekId=week_id,
@@ -316,7 +301,7 @@ def build_weekly_digest(week_id: str, digests: Sequence[OutputDigest]) -> Weekly
             canonicalPath=canonical_path,
         ),
         primaryCta=OutputDigestCta(
-            label="Get the next weekly roundup",
+            label="Follow the Brief",
             href="/brief/subscribe",
             kind="subscribe",
         ),
@@ -325,24 +310,8 @@ def build_weekly_digest(week_id: str, digests: Sequence[OutputDigest]) -> Weekly
             href="/brief",
             kind="archive",
         ),
-        editorial=OutputDigestEditorial(
-            editorialFrame=_trim_text(
-                (
-                    reviewed_editorial.editorialFrame
-                    if reviewed_editorial
-                    else f"This weekly layer is where the brief stops being a log of daily issues and becomes a directional read on {', '.join(top_themes[:3]) or 'the current AI engineering stack'}."
-                ),
-                240,
-            ),
-            builderImplication=_trim_text(
-                strongest_editorial.builderImplication if strongest_editorial else issue_summary or newest.issueSummary,
-                220,
-            ),
-            watchSignal=_trim_text(
-                strongest_editorial.watchSignal if strongest_editorial else f"Watch which weekly themes keep reappearing as durable operational constraints rather than one-off launches.",
-                240,
-            ),
-        ),
+        editorial=editorial_source.editorial if editorial_source else None,
+        editorialSourceDate=editorial_source.date if editorial_source else None,
     )
 
 

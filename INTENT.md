@@ -2,14 +2,16 @@
 
 ## Overview
 
-Provide a read-optimized context API backed by Postgres for fast, deterministic context packs.
+Provide a research service backed by Postgres: collect sources, retrieve cited
+evidence for project questions, and produce concise reviewed Brief reports.
 
 ## Responsibilities
 
-- Mirror key Notion databases (start with Projects + Tasks).
-- Expose compact context endpoints (project/task snapshots, search snippets).
-- Support manual sync endpoints first; background sync later.
-  - Manual sync uses the Notion gateway db sample endpoint.
+- Fetch and extract selected public research sources with provenance.
+- Return bounded context packs with source citations and limitations.
+- Review Brief drafts for factual grounding, structure and natural writing.
+- Report collection, embedding and publication failures separately.
+- Maintain existing Notion Projects/Tasks sync and search without expanding it.
 
 ## Constraints
 
@@ -17,7 +19,7 @@ Provide a read-optimized context API backed by Postgres for fast, deterministic 
 - No host-installed dependencies for the canonical workflow.
 - Use Docker service names (not localhost) for container-to-container calls.
 
-## Implemented API (v1)
+## Legacy API (v1, maintained)
 
 - `POST /v1/projects/sync`
 - `POST /v1/tasks/sync`

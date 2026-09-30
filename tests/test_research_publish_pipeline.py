@@ -212,9 +212,11 @@ def test_publish_pipeline_writes_structured_report(
     assert '"dry_run": true' in report_path.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("selective", [False, True])
 def test_publish_pipeline_blocks_daily_publish_when_candidate_preflight_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    selective: bool,
 ) -> None:
     repo = _website_repo(tmp_path)
     digest_settings = _digest_settings(repo)
@@ -234,16 +236,27 @@ def test_publish_pipeline_blocks_daily_publish_when_candidate_preflight_fails(
     report_dir = tmp_path / "reports"
     monkeypatch.setenv("BRIEF_PUBLISH_REPORT_DIR", str(report_dir))
 
+    request = GeneratorRequest(
+        mode="daily",
+        target_date=None,
+        start_date=None,
+        end_date=None,
+        force=False,
+        dry_run=False,
+        allow_skipped_weak=selective,
+    )
+    if selective:
+        monkeypatch.setattr("app.research.publish_pipeline.execute_digest_generation", lambda **kw: {
+            "generated_dates": [], "results": [{"date": "2026-03-12", "status": "skipped-weak", "reason": "too few sources"}],
+        } if kw["allow_skipped_weak"] else pytest.fail("selective flag lost"))
+        monkeypatch.setattr("app.research.publish_pipeline.list_worktree_changes", lambda repo: [])
+        report = execute_publish(request=request, digest_settings=digest_settings, distribution_settings=distribution_settings)
+        assert not report["pushed"]
+        assert report["skipped_dates"][0]["reason"] == "too few sources"
+        return
     with pytest.raises(BriefPublishError, match="only 2 eligible items found"):
         execute_publish(
-            request=GeneratorRequest(
-                mode="daily",
-                target_date=None,
-                start_date=None,
-                end_date=None,
-                force=False,
-                dry_run=False,
-            ),
+            request=request,
             digest_settings=digest_settings,
             distribution_settings=distribution_settings,
         )

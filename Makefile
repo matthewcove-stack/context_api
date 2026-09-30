@@ -1,4 +1,5 @@
-.PHONY: sync-env dev up down test-isolated
+.PHONY: sync-env dev up down test test-isolated
+PYTHON ?= python3
 # Edge contract targets
 EDGE_REPO ?= ../../edge_proxy
 EDGE_BASE_COMPOSE ?= docker-compose.yml
@@ -22,5 +23,7 @@ up:
 down:
 	$(COMPOSE_WITH_EDGE) down
 
+test: test-isolated
+
 test-isolated:
-	python scripts/run_pytest_isolated.py $(PYTEST_ARGS)
+	$(PYTHON) scripts/run_pytest_isolated.py $(PYTEST_ARGS)

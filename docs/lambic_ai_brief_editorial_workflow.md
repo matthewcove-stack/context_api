@@ -42,6 +42,7 @@ Every new daily issue now passes these stages:
 - Report what happened before interpreting it.
 - Use examples and mechanisms to reduce abstraction.
 - Do not claim that unrelated stories have converged on a single lesson merely to make the issue feel coherent.
+- Do not force unrelated stories into a control-plane, audit or governance theme. Separate factual sentences are preferable when there is no evidenced connection.
 
 ### Keep each field distinct
 
@@ -71,9 +72,18 @@ These are examples, not the full test. The reviewer also checks abstract-noun st
 ### Make recommendations earned and specific
 
 - Not every item needs to tell the reader to build something.
+- A concrete limitation, missing comparison or unanswered question may be the most useful takeaway. Do not invent thresholds, checklists or first-hand Lambic experiments to manufacture an action.
 - A recommendation should identify an action, test, threshold, owner, or trade-off supported by the source.
 - No more than half of the takeaways should begin as commands.
 - A watch item must name observable evidence from the issue. `Watch what happens next` is not a watch item.
+
+### Weekly collections
+
+The current weekly output is an archive collection, not an independently reported
+weekly essay. It uses the latest issue's complete summary and, where available,
+complete reviewed editorial copy with a link to its source issue. No character
+trimming, generic weekly thesis or unreviewed fallback commentary is allowed.
+Original weekly analysis remains a separately reviewed future capability.
 
 ## Revising published issues
 

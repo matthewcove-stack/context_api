@@ -1,6 +1,25 @@
 # context_api — Current State (Authoritative for this repo)
 
-## What works today
+## Current focus and production evidence — 30 September 2026
+
+Active scope: research collection, cited retrieval and selective Brief publishing.
+Voice/Notion task surfaces are maintained legacy integrations. No validated
+multi-user product or demonstrated repeat use is claimed.
+
+The live API was healthy and collection had reached 11,630 documents across 16
+enabled sources. Fresh embeddings stopped on 19 September; the provider returned
+HTTP 429, `insufficient_quota` / `credit_balance_exhausted`. At inspection, 709
+new documents since then had no embedding model recorded. The latest public
+issue was dated 18 September. These are dated observations, not live counters.
+
+Cleanup changes: provider errors stop repair with exit 78 (account) or 75
+(temporary); long-running embedding workers use a per-credential cooldown.
+Scheduled publishing keeps normal quality thresholds and records weak issues as
+withheld, without calendar-filling retries. Weekly collections preserve complete
+reviewed daily commentary with its source date, or omit commentary.
+Deployment and credit recovery must be verified separately from passing tests.
+
+## Implemented capabilities
 - FastAPI + Postgres + Alembic.
 - Authenticated `/v1` endpoints for mirrored Projects/Tasks sync + search.
 - Authenticated `/v1` dashboard endpoints for Brain OS shell reads:
@@ -54,7 +73,7 @@
   - `research_bootstrap_events` audit table for bootstrap requests/results.
 - Isolated Dockerized test workflow (`make test` or `python scripts/run_pytest_isolated.py`) with a disposable `context_test` database and a fail-closed pytest database guard.
 - Curated-source validation and feed-first collection for stable publisher feeds.
-- Daily Brief maintenance reconciles sources, repairs recent missing embeddings, records blocked-preflight reports, and executes the documented bounded fallback after a strict miss.
+- Brief maintenance reconciles sources and repairs a bounded batch of missing embeddings. Scheduled selection withholds weak issues without reducing item/source thresholds; manual backfills remain explicit operator work.
 
 ## Implemented in this phase
 - New tables:

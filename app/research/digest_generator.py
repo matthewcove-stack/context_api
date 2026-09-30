@@ -177,6 +177,7 @@ class GeneratorRequest:
     end_date: Optional[date]
     force: bool
     dry_run: bool
+    allow_skipped_weak: bool = False
 
 
 @dataclass
@@ -724,7 +725,7 @@ def load_settings() -> DigestGeneratorSettings:
         backfill_end_date=parse_date(os.getenv("DAILY_DIGEST_BACKFILL_END_DATE", "").strip())
         if os.getenv("DAILY_DIGEST_BACKFILL_END_DATE", "").strip()
         else None,
-        max_items=max(int(os.getenv("DAILY_DIGEST_MAX_ITEMS", "7")), 1),
+        max_items=max(int(os.getenv("DAILY_DIGEST_MAX_ITEMS", "5")), 1),
         min_items=max(int(os.getenv("DAILY_DIGEST_MIN_ITEMS", "4")), 1),
         min_source_count=max(int(os.getenv("DAILY_DIGEST_MIN_SOURCE_COUNT", "3")), 1),
         backfill_min_source_count=max(
@@ -1138,6 +1139,9 @@ def write_editorial_draft(
         "Avoid repetitive sentence stems across items, boilerplate transitions, and generic framing that could fit an unrelated article. "
         "The title should name the strongest specific development in 5 to 18 words. Do not make it a list joined by 'plus' or 'while'. "
         "The intro should use one or two named facts to establish why the edition is worth reading. The summary should connect only stories that genuinely share a mechanism. "
+        "If the stories are unrelated, give separate factual sentences; do not invent a common lesson about control, governance, or audit logs. "
+        "An engineering takeaway may explain a limitation or the evidence needed for a decision. Do not invent thresholds, mandatory checklists, or work for the reader merely to fill this field. "
+        "Never imply Lambic tested a product or achieved a result unless the supplied evidence explicitly records that work. "
         "Make issue_summary one plain, specific sentence. Every top_things entry must be a complete sentence and must not duplicate another field. "
         "For editorial: editorial_frame states Lambic's specific judgement about the reported evidence, not how to read the issue; builder_implication identifies one concrete change to a design or operating decision; watch_signal names observable future evidence that could confirm or weaken the judgement. "
         "The watch_signal must name a company, product, benchmark, measurement, release, incident, or policy described in the source material. Never write 'watch whether signals turn into patterns'. "
@@ -1205,7 +1209,8 @@ def review_and_rewrite_editorial_draft(
         "You are the second, independent editor for the Lambic AI Brief. Return strict JSON only with keys review and digest. "
         "Review has arrays structural_findings, anti_ai_findings, and material_edits. Digest must preserve the exact draft schema and every document_id exactly once. "
         "Apply the Lambic writing workflow: structural review first, anti-AI review second, final polish last. "
-        "Structural review: each field must do distinct work; what_happened reports; why_it_matters explains a mechanism or consequence; engineering_takeaway gives a specific response and must not merely restate why_it_matters. Delete duplication. "
+        "Structural review: each field must do distinct work; what_happened reports; why_it_matters explains a mechanism or consequence; engineering_takeaway gives a warranted response or states a decision-relevant limitation. Delete duplication. "
+        "Reject forced connections between unrelated stories, especially generic control, audit-log, or governance conclusions. Separate the facts if there is no shared mechanism. Do not invent numeric thresholds, checklists, or claims of Lambic experience. "
         "Anti-AI review: cut performative phrasing, vague abstraction, generic transitions, empty polish, rhetorical symmetry, consultancy language, and sentences that could appear unchanged in an unrelated LinkedIn post. "
         "Replace abstraction with a named variable, mechanism, consequence, example, test, threshold, or trade-off. Remove any sentence written to sound impressive. "
         "Use UK English and restrained operational prose. Keep natural variation in sentence length and openings. No more than half of engineering_takeaway values may begin with a command verb such as Add, Build, Design, Implement, Keep, Make, Pin, Require, Treat, Use, or Version. Count them exactly; recast the remainder around a concrete subject, condition, or decision. "

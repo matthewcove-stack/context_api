@@ -1,6 +1,6 @@
 # Lambic AI Brief Generator
 
-This pipeline generates daily Lambic AI Brief issues from the `ai_research` corpus and writes them into the website repo as static JSON artifacts.
+This pipeline generates selective Lambic AI Brief issues from the `ai_research` corpus and writes them into the website repo as static JSON artifacts. It attempts publication daily but does not require an issue on every date.
 
 The canonical production command is now the publish orchestrator, which also refreshes derivative distribution assets, weekly roundups, feeds, and website validation in one run.
 
@@ -24,6 +24,7 @@ Optional flags:
 - `--date YYYY-MM-DD`
 - `--force`
 - `--dry-run`
+- `--allow-skipped-weak` (publish command only): record an editorial withholding decision without failing the scheduled job; actual generation/provider errors still fail
 
 Optional report env:
 
@@ -44,6 +45,7 @@ Recommended defaults are defined in `.env.example`.
 - The publish command writes one JSON file per day into `apps/web/content/research-digests/` in the website repo.
 - Drafting is followed by an independent structural and anti-AI rewrite, then a deterministic house-style gate that compares the issue with the previous ten. A failed issue is skipped rather than published.
 - Passing issues include an `editorialReview` record with the workflow version and review evidence.
+- The default selection is at most five items, with the existing four-item and three-source minimums unchanged. Prompts must not invent a common control/audit theme for unrelated stories.
 - It then refreshes:
   - `apps/web/content/research-digest-assets/`
   - `apps/web/content/research-weekly/`
@@ -55,6 +57,7 @@ Recommended defaults are defined in `.env.example`.
 - For daily mode it checks database reachability and candidate sufficiency before mutating the website repo.
 - `--dry-run` executes the full generation and validation flow inside a temporary workspace copy, leaving the real repo untouched.
 - A structured JSON report can be written for each run for scheduler or operator inspection.
+- Weekly outputs are attributed archive collections. They preserve complete reviewed daily commentary, include `editorialSourceDate`, or omit commentary if no reviewed source exists. They do not claim an original weekly synthesis.
 
 The editorial rules and repair path are documented in `docs/lambic_ai_brief_editorial_workflow.md`.
 

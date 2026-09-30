@@ -35,7 +35,7 @@ def _wait_for_postgres(container_name: str, *, timeout_s: float = 30.0) -> None:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         result = _run(
-            ["docker", "exec", container_name, "pg_isready", "-U", "context", "-d", "context_test"],
+            ["docker", "exec", container_name, "pg_isready", "-h", "127.0.0.1", "-U", "context", "-d", "context_test"],
             check=False,
             capture_output=True,
         )
