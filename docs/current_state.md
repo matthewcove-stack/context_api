@@ -19,6 +19,21 @@ withheld, without calendar-filling retries. Weekly collections preserve complete
 reviewed daily commentary with its source date, or omit commentary.
 Deployment and credit recovery must be verified separately from passing tests.
 
+## Recovery assessment — 9 October 2026
+
+The 8 October BrainOS publication run still stopped during embedding repair with
+OpenAI HTTP 429 `credit_balance_exhausted` and exit 78. Its independent freshness
+check reported the 18 September issue was twenty days old. Collection succeeded
+in the earlier run; neither result establishes publication recovery.
+
+Proposed change: persist the terminal embedding repair summary in the existing
+publish report directory, so account-blocked runs have an uploadable artifact
+even when the publisher never starts. Provider cooldowns and editorial gates
+remain unchanged. See `docs/brief_credit_recovery_20261009.md` for provider
+compatibility evidence, illustrative costs, scoped verification and the bounded
+owner-approved credit recovery procedure. No production or billing change is
+claimed.
+
 ## Implemented capabilities
 - FastAPI + Postgres + Alembic.
 - Authenticated `/v1` endpoints for mirrored Projects/Tasks sync + search.
@@ -199,3 +214,4 @@ Deployment and credit recovery must be verified separately from passing tests.
 If changes affect API contracts, migrations, verification commands, or phase status:
 - update this file first,
 - then update `README.md` and supporting contract docs.
+

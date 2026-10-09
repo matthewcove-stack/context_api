@@ -3,10 +3,42 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
 
 from app.research.embeddings import EmbeddingProviderError, resolve_embedding_runtime
 from app.research.worker import _embed_existing_document
 from app.storage.db import create_db_engine, list_research_documents_for_reembed
+
+
+def emit_report(report: dict, *, exit_status: int) -> None:
+    """Keep repair diagnostics available when publication never starts."""
+    print(json.dumps(report))
+    report_dir = os.getenv("BRIEF_PUBLISH_REPORT_DIR", "").strip()
+    if not report_dir:
+        return
+    temporary_path = None
+    try:
+        directory = Path(report_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        artifact = dict(report, phase="embedding-repair", exit_status=exit_status)
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=directory, delete=False) as output:
+            temporary_path = Path(output.name)
+            json.dump(artifact, output, indent=2)
+            output.write("\n")
+        temporary_path.replace(directory / f"embedding-repair-{timestamp}-{os.getpid()}.json")
+    except OSError:
+        # Reporting must not mask the original provider status or trigger retry.
+        print("Unable to write embedding repair report; see stdout diagnostics.", file=sys.stderr)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def main() -> int:
@@ -49,28 +81,30 @@ def main() -> int:
             )
             processed += 1
         except EmbeddingProviderError as exc:
-            print(json.dumps({
+            emit_report({
                 "status": "blocked-provider", "provider_code": exc.code,
                 "http_status": exc.status, "action": exc.action,
                 "selected": len(rows), "processed": processed, "failed": failed + 1,
                 "remaining": len(rows) - processed - failed - 1,
-            }))
+            }, exit_status=exc.exit_status)
             return exc.exit_status
         except Exception as exc:
             failed += 1
             print(json.dumps({"document_id": str(row["document_id"]), "status": "failed", "error": str(exc)}))
-    print(
-        json.dumps({
+    exit_status = 1 if failed else 0
+    emit_report(
+        {
             "topic_key": args.topic_key.strip().lower(),
             "embedding_model_id": embedding_model_id,
             "requested_limit": max(args.limit, 1),
             "selected": len(rows),
             "processed": processed,
             "failed": failed,
-        })
+        }, exit_status=exit_status
     )
-    return 1 if failed else 0
+    return exit_status
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
